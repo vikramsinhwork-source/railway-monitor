@@ -15,6 +15,15 @@ import usersRoutes from './modules/users/users.routes.js';
 const app = express();
 const server = createServer(app);
 
+// Parse CORS_ORIGIN or CORS_ORIGINS (comma-separated) – no '*' with credentials
+function getCorsOrigins() {
+  const raw = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '';
+  if (!raw.trim()) return ['http://localhost:3000', 'https://railwaymonitor.in'];
+  return raw.split(',').map((o) => o.trim()).filter(Boolean);
+}
+
+const corsOrigins = getCorsOrigins();
+
 async function initDB() {
   try {
     await sequelize.authenticate();
@@ -28,10 +37,13 @@ async function initDB() {
   }
 }
 
-// Configure CORS for Express
+// Configure CORS – explicit origins only (no '*') so credentials work
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
-  credentials: true
+  origin: corsOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 204,
 }));
 
 app.use(express.json());
@@ -71,9 +83,9 @@ logInfo('Server', 'Auth and user routes registered', {
  */
 const io = new Server(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: corsOrigins,
     methods: ['GET', 'POST'],
-    credentials: true
+    credentials: true,
   },
   // Use authentication middleware for all connections
   // This ensures only authenticated clients can connect
@@ -114,7 +126,7 @@ initDB()
   `);
   logInfo('Server', 'Server started successfully', {
     port: PORT,
-    corsOrigin: process.env.CORS_ORIGIN || '*',
+    corsOrigin: corsOrigins.join(','),
     healthCheck: `http://localhost:${PORT}/health`,
     apiDocs: `http://localhost:${PORT}/api-docs`
   });
