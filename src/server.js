@@ -15,14 +15,18 @@ import usersRoutes from './modules/users/users.routes.js';
 const app = express();
 const server = createServer(app);
 
-// Parse CORS_ORIGIN or CORS_ORIGINS (comma-separated) – no '*' with credentials
-function getCorsOrigins() {
+// CORS: set CORS_ORIGIN=* or CORS_ALLOW_ALL=true to allow any origin (reflects request origin; works with credentials).
+// Otherwise use CORS_ORIGIN or CORS_ORIGINS (comma-separated list).
+const corsAllowAll = process.env.CORS_ORIGIN === '*' || process.env.CORS_ALLOW_ALL === 'true';
+const allowedOrigins = (() => {
+  if (corsAllowAll) return true; // allow any origin (cors will reflect request origin)
   const raw = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '';
-  if (!raw.trim()) return ['http://localhost:3000', 'https://railwaymonitor.in'];
-  return raw.split(',').map((o) => o.trim()).filter(Boolean);
-}
-
-const corsOrigins = getCorsOrigins();
+  if (raw.trim()) return raw.split(',').map((o) => o.trim()).filter(Boolean);
+  return [
+    'http://localhost:63894',
+    'https://railwaymonitor.in',
+  ];
+})();
 
 async function initDB() {
   try {
@@ -37,13 +41,10 @@ async function initDB() {
   }
 }
 
-// Configure CORS – explicit origins only (no '*') so credentials work
+// Only Express manages CORS; do not set Access-Control-* in Nginx or manually
 app.use(cors({
-  origin: corsOrigins,
+  origin: allowedOrigins,
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  optionsSuccessStatus: 204,
 }));
 
 app.use(express.json());
@@ -83,7 +84,7 @@ logInfo('Server', 'Auth and user routes registered', {
  */
 const io = new Server(server, {
   cors: {
-    origin: corsOrigins,
+    origin: corsAllowAll ? '*' : allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -126,7 +127,7 @@ initDB()
   `);
   logInfo('Server', 'Server started successfully', {
     port: PORT,
-    corsOrigin: corsOrigins.join(','),
+    corsOrigin: allowedOrigins === true ? '*' : allowedOrigins.join(','),
     healthCheck: `http://localhost:${PORT}/health`,
     apiDocs: `http://localhost:${PORT}/api-docs`
   });
