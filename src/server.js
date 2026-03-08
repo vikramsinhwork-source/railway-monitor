@@ -15,18 +15,13 @@ import usersRoutes from './modules/users/users.routes.js';
 const app = express();
 const server = createServer(app);
 
-// CORS: set CORS_ORIGIN=* or CORS_ALLOW_ALL=true to allow any origin (reflects request origin; works with credentials).
-// Otherwise use CORS_ORIGIN or CORS_ORIGINS (comma-separated list).
-const corsAllowAll = process.env.CORS_ORIGIN === '*' || process.env.CORS_ALLOW_ALL === 'true';
+// CORS: default allow all origins. Set CORS_ORIGIN or CORS_ORIGINS (comma-separated) to restrict.
 const allowedOrigins = (() => {
-  if (corsAllowAll) return true; // allow any origin (cors will reflect request origin)
   const raw = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '';
-  if (raw.trim()) return raw.split(',').map((o) => o.trim()).filter(Boolean);
-  return [
-    'http://localhost:63894',
-    'https://railwaymonitor.in',
-  ];
+  if (!raw.trim() || raw.trim() === '*') return true; // default: allow any origin
+  return raw.split(',').map((o) => o.trim()).filter(Boolean);
 })();
+const corsAllowAll = allowedOrigins === true;
 
 async function initDB() {
   try {
