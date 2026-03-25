@@ -1,45 +1,48 @@
 /**
- * Seed static ADMIN user.
- * Only one ADMIN: user_id=admin, email=admin@gmail.com, password=admin123.
+ * Seed static users for local/dev bootstrap.
  * Call after sequelize.sync().
  */
 
 import bcrypt from 'bcrypt';
 import User from '../modules/users/user.model.js';
-import { logInfo, logWarn } from '../utils/logger.js';
+import { logInfo } from '../utils/logger.js';
 
-const ADMIN_USER_ID = 'admin';
-const ADMIN_EMAIL = 'admin@gmail.com';
-const ADMIN_PASSWORD = 'admin123';
+const SEEDED_USERS = [
+  // Keep primary admin credentials used by tests.
+  { user_id: 'admin', name: 'Admin', password: 'admin123', role: 'ADMIN', email: 'admin@gmail.com' },
+  { user_id: 'admin2', name: 'Admin 2', password: 'admin2123', role: 'ADMIN', email: null },
+  { user_id: 'admin3', name: 'Admin 3', password: 'admin3123', role: 'ADMIN', email: null },
+  { user_id: 'admin4', name: 'Admin 4', password: 'admin4123', role: 'ADMIN', email: null },
+  { user_id: 'admin5', name: 'Admin 5', password: 'admin5123', role: 'ADMIN', email: null },
+  { user_id: 'LOBBY', name: 'BOTAD LOBBY', password: '12345678', role: 'USER', email: null },
+  { user_id: 'vp', name: 'vp', password: '12345', role: 'USER', email: null },
+];
 
 export async function seedAdmin() {
-  try {
-    const existing = await User.findOne({ where: { role: 'ADMIN' } });
+  for (const entry of SEEDED_USERS) {
+    const existing = await User.findOne({ where: { user_id: entry.user_id } });
     if (existing) {
-      logInfo('Seed', 'ADMIN user already exists', { user_id: existing.user_id });
-      return;
+      logInfo('Seed', 'User already exists', {
+        user_id: existing.user_id,
+        role: existing.role,
+      });
+      continue;
     }
 
-    const password_hash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+    const password_hash = await bcrypt.hash(entry.password, 10);
     await User.create({
-      user_id: ADMIN_USER_ID,
-      name: 'Admin',
-      email: ADMIN_EMAIL,
+      user_id: entry.user_id,
+      name: entry.name,
+      email: entry.email,
       password_hash,
-      role: 'ADMIN',
+      role: entry.role,
       status: 'ACTIVE',
       created_by: null,
     });
 
-    logInfo('Seed', 'Static ADMIN user created', {
-      user_id: ADMIN_USER_ID,
-      email: ADMIN_EMAIL,
+    logInfo('Seed', 'Static user created', {
+      user_id: entry.user_id,
+      role: entry.role,
     });
-  } catch (err) {
-    if (err.name === 'SequelizeUniqueConstraintError') {
-      logWarn('Seed', 'ADMIN user already exists (unique constraint)', { user_id: ADMIN_USER_ID });
-      return;
-    }
-    throw err;
   }
 }

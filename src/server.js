@@ -11,6 +11,8 @@ import { seedAdmin } from './bootstrap/seedAdmin.js';
 import { logInfo, logWarn, logError } from './utils/logger.js';
 import authRoutes from './auth/auth.routes.js';
 import usersRoutes from './modules/users/users.routes.js';
+import { initFormModels } from './modules/forms/index.js';
+import formsRoutes from './modules/forms/forms.routes.js';
 
 const app = express();
 const server = createServer(app);
@@ -22,6 +24,7 @@ const allowedOrigins = (() => {
   return raw.split(',').map((o) => o.trim()).filter(Boolean);
 })();
 const corsAllowAll = allowedOrigins === true;
+initFormModels();
 
 async function initDB() {
   try {
@@ -61,9 +64,19 @@ logInfo('Server', 'Swagger UI at /api-docs');
 // Authentication API routes (application login + legacy)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/forms', formsRoutes);
 logInfo('Server', 'Auth and user routes registered', {
   auth: ['/api/auth/login', '/api/auth/device-token', '/api/auth/register', '/api/auth/users'],
-  users: ['/api/users', '/api/users/me', '/api/users/:id', '/api/users/:id/deactivate']
+  users: ['/api/users', '/api/users/me', '/api/users/:id', '/api/users/:id/deactivate'],
+  forms: [
+    '/api/forms/questions',
+    '/api/forms/questions/:id',
+    '/api/forms/today',
+    '/api/forms/submissions/today',
+    '/api/forms/submissions/me/latest',
+    '/api/forms/analytics/users',
+    '/api/forms/analytics/users/:userId/history',
+  ]
 });
 
 /**
