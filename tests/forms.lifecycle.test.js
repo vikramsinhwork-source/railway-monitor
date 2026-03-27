@@ -360,10 +360,16 @@ test('Forms analytics endpoints: filters, pagination, and validation errors', as
   assert.ok(history.data.history.length >= 1);
   assert.ok(Array.isArray(history.data.history[0].answers));
 
-  const invalidHistoryUserId = await rest('/api/forms/analytics/users/not-a-uuid/history', {
+  const historyByUserId = await rest(`/api/forms/analytics/users/${encodeURIComponent(testUserId)}/history`, {
     headers: { Authorization: `Bearer ${adminToken}` },
   });
-  assert.strictEqual(invalidHistoryUserId.status, 400);
+  assert.strictEqual(historyByUserId.status, 200);
+  assert.ok(Array.isArray(historyByUserId.data.history));
+
+  const invalidHistoryUserId = await rest('/api/forms/analytics/users/not-a-real-user/history', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(invalidHistoryUserId.status, 404);
 
   const unknownHistoryUser = await rest('/api/forms/analytics/users/11111111-1111-4111-8111-111111111111/history', {
     headers: { Authorization: `Bearer ${adminToken}` },

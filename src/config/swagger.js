@@ -508,7 +508,7 @@ spec.paths['/api/forms/analytics/users/{userId}/history'] = {
     summary: 'Get one user submission timeline (Admin only)',
     security: [{ bearerAuth: [] }],
     parameters: [
-      { name: 'userId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'userId', in: 'path', required: true, description: 'User UUID id or user_id', schema: { type: 'string' } },
       { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1 } },
       { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
       { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },

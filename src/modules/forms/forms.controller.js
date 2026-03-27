@@ -537,9 +537,6 @@ export async function listUsersSubmissionAnalytics(req, res) {
 export async function getUserSubmissionHistory(req, res) {
   try {
     const { userId } = req.params;
-    if (!isValidUuid(userId)) {
-      return res.status(400).json({ success: false, message: 'Invalid user id' });
-    }
 
     const page = parsePositiveInt(req.query.page, 1);
     const limit = parsePositiveInt(req.query.limit, 20);
@@ -571,15 +568,22 @@ export async function getUserSubmissionHistory(req, res) {
       });
     }
 
+    const userWhere = { role: 'USER' };
+    if (isValidUuid(userId)) {
+      userWhere.id = userId;
+    } else {
+      userWhere.user_id = userId;
+    }
+
     const user = await User.findOne({
-      where: { id: userId, role: 'USER' },
+      where: userWhere,
       attributes: ['id', 'user_id', 'name', 'email', 'status'],
     });
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const where = { user_id: userId };
+    const where = { user_id: user.id };
     if (fromDate && toDate) {
       where.submission_date = { [Op.between]: [fromDate, toDate] };
     } else if (fromDate) {
