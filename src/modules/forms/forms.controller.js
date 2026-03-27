@@ -269,22 +269,6 @@ export async function submitTodayAnswers(req, res) {
       return res.status(404).json({ success: false, message: 'No active form found for today' });
     }
 
-    const existingSubmission = await Submission.findOne({
-      where: {
-        user_id: userId,
-        submission_date: submissionDate,
-      },
-      transaction: tx,
-      lock: tx.LOCK.UPDATE,
-    });
-    if (existingSubmission) {
-      await tx.rollback();
-      return res.status(409).json({
-        success: false,
-        message: 'You have already submitted answers for today',
-      });
-    }
-
     const questions = await Question.findAll({
       where: { form_id: activeForm.id },
       order: [['sort_order', 'ASC'], ['created_at', 'ASC']],
@@ -376,12 +360,6 @@ export async function submitTodayAnswers(req, res) {
     });
   } catch (err) {
     await tx.rollback();
-    if (err instanceof UniqueConstraintError) {
-      return res.status(409).json({
-        success: false,
-        message: 'You have already submitted answers for today',
-      });
-    }
     logWarn('Forms', 'Submit today answers error', { error: err.message, userId: req.auth?.userId });
     return res.status(500).json({ success: false, message: 'Failed to submit answers' });
   }

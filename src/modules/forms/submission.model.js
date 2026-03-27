@@ -41,9 +41,8 @@ const Submission = sequelize.define(
     updatedAt: 'updated_at',
     indexes: [
       {
-        unique: true,
         fields: ['user_id', 'submission_date'],
-        name: 'submissions_one_per_user_per_day_idx',
+        name: 'submissions_user_submission_date_idx',
       },
       {
         fields: ['submission_date'],

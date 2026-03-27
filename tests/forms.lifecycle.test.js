@@ -177,7 +177,7 @@ test('Forms question CRUD validations and edge cases', async () => {
   assert.strictEqual(deleteQuestion.data.success, true);
 });
 
-test('Forms user submissions, duplicate prevention, and latest endpoint', async () => {
+test('Forms user submissions allow multiple per day and latest endpoint works', async () => {
   const { adminToken, userToken } = await setupAdminAndUser();
 
   const createRequired = await createQuestion(adminToken, {
@@ -265,17 +265,18 @@ test('Forms user submissions, duplicate prevention, and latest endpoint', async 
   assert.strictEqual(submitToday.status, 201, JSON.stringify(submitToday.data));
   assert.ok(submitToday.data.answers.length >= 2);
 
-  const duplicateSubmit = await rest('/api/forms/submissions/today', {
+  const secondSubmit = await rest('/api/forms/submissions/today', {
     method: 'POST',
     headers: { Authorization: `Bearer ${userToken}` },
     body: JSON.stringify({
       answers: allQuestionIds.map((questionId) => ({
         question_id: questionId,
-        answer_text: questionId === requiredQuestionId ? 'Second attempt should fail.' : 'Duplicate submit payload',
+        answer_text: questionId === requiredQuestionId ? 'Second submission same day.' : 'Second payload',
       })),
     }),
   });
-  assert.strictEqual(duplicateSubmit.status, 409);
+  assert.strictEqual(secondSubmit.status, 201, JSON.stringify(secondSubmit.data));
+  assert.ok(secondSubmit.data.submission?.id);
 
   const latestSubmission = await rest('/api/forms/submissions/me/latest', {
     headers: { Authorization: `Bearer ${userToken}` },
@@ -283,6 +284,7 @@ test('Forms user submissions, duplicate prevention, and latest endpoint', async 
   assert.strictEqual(latestSubmission.status, 200);
   assert.ok(latestSubmission.data.submission);
   assert.ok(latestSubmission.data.submission.answers.length >= 2);
+  assert.strictEqual(latestSubmission.data.submission.id, secondSubmit.data.submission.id);
 });
 
 test('Forms analytics endpoints: filters, pagination, and validation errors', async () => {

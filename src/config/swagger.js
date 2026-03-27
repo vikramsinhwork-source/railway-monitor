@@ -449,7 +449,7 @@ spec.paths['/api/forms/today'] = {
 spec.paths['/api/forms/submissions/today'] = {
   post: {
     tags: ['Forms'],
-    summary: "Submit today's answers (User only, once/day)",
+    summary: "Submit today's answers (User only)",
     security: [{ bearerAuth: [] }],
     requestBody: {
       required: true,
@@ -465,7 +465,6 @@ spec.paths['/api/forms/submissions/today'] = {
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'User access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       404: { description: 'No active form found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      409: { description: 'Already submitted today', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };
