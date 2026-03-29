@@ -14,5 +14,6 @@ router.get('/analytics/users/:userId/history', requireAuth, requireAdmin, formsC
 router.get('/today', requireAuth, requireUser, formsController.getTodayQuestions);
 router.post('/submissions/today', requireAuth, requireUser, formsController.submitTodayAnswers);
 router.get('/submissions/me/latest', requireAuth, requireUser, formsController.getMyLatestSubmission);
+router.get('/submissions/me', requireAuth, requireUser, formsController.getMySubmissionHistory);
 
 export default router;

@@ -386,3 +386,66 @@ test('Forms analytics endpoints: filters, pagination, and validation errors', as
   });
   assert.strictEqual(invalidHistoryDate.status, 400);
 });
+
+test('GET /api/forms/submissions/me: scoped history, pagination, role guards', async () => {
+  const { adminToken, userToken, userId, testUserId } = await setupAdminAndUser();
+
+  const unauthorized = await rest('/api/forms/submissions/me');
+  assert.strictEqual(unauthorized.status, 401);
+
+  const adminBlocked = await rest('/api/forms/submissions/me?page=1&limit=10', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(adminBlocked.status, 403);
+
+  const emptyHistory = await rest('/api/forms/submissions/me?page=1&limit=10', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(emptyHistory.status, 200, JSON.stringify(emptyHistory.data));
+  assert.strictEqual(emptyHistory.data.user.id, userId);
+  assert.strictEqual(emptyHistory.data.user.user_id, testUserId);
+  assert.ok(Array.isArray(emptyHistory.data.history));
+  assert.strictEqual(emptyHistory.data.history.length, 0);
+  assert.strictEqual(emptyHistory.data.pagination.total, 0);
+
+  const createRequired = await createQuestion(adminToken, {
+    prompt: `Me history ${Date.now()}`,
+    is_required: true,
+    sort_order: 0,
+  });
+  assert.strictEqual(createRequired.status, 201);
+  const requiredQuestionId = createRequired.data.question.id;
+
+  const allQuestionIds = await getTodayQuestionIds(userToken);
+  const submitToday = await rest('/api/forms/submissions/today', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({
+      answers: allQuestionIds.map((qid) => ({
+        question_id: qid,
+        answer_text: qid === requiredQuestionId ? 'My history row' : 'Other answer',
+      })),
+    }),
+  });
+  assert.strictEqual(submitToday.status, 201, JSON.stringify(submitToday.data));
+
+  const withData = await rest('/api/forms/submissions/me?page=1&limit=10', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(withData.status, 200);
+  assert.ok(withData.data.history.length >= 1);
+  const first = withData.data.history[0];
+  assert.ok(first.id);
+  assert.ok(Array.isArray(first.answers));
+  assert.ok(first.answers.some((a) => a.answer_text === 'My history row'));
+
+  const invalidLimit = await rest('/api/forms/submissions/me?limit=200', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(invalidLimit.status, 400);
+
+  const badDate = await rest('/api/forms/submissions/me?from_date=not-a-date', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(badDate.status, 400);
+});

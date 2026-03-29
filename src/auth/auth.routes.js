@@ -2,6 +2,7 @@
  * Authentication API Routes
  *
  * Application login: POST /login with user_id + password (DB, JWT with userId/role).
+ * Self-signup: POST /signup (DB USER, public).
  * Legacy: device-token, register, etc. for backward compatibility.
  */
 
@@ -50,6 +51,16 @@ if (users.size === 0) {
  */
 router.post('/login', (req, res, next) => {
   authController.login(req, res).catch(next);
+});
+
+/**
+ * POST /api/auth/signup
+ *
+ * Public self-registration: creates DB user with role USER, status ACTIVE.
+ * Body: user_id, name, password (required); email, crew_type, head_quarter, mobile (optional).
+ */
+router.post('/signup', (req, res, next) => {
+  authController.signup(req, res).catch(next);
 });
 
 /**

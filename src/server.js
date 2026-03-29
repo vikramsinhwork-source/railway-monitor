@@ -10,6 +10,7 @@ import { initializeSocket } from './socket/index.js';
 import { seedAdmin } from './bootstrap/seedAdmin.js';
 import { logInfo, logWarn, logError } from './utils/logger.js';
 import authRoutes from './auth/auth.routes.js';
+import './modules/users/userFaceProfile.model.js';
 import usersRoutes from './modules/users/users.routes.js';
 import { initFormModels } from './modules/forms/index.js';
 import formsRoutes from './modules/forms/forms.routes.js';
@@ -66,13 +67,24 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/forms', formsRoutes);
 logInfo('Server', 'Auth and user routes registered', {
-  auth: ['/api/auth/login', '/api/auth/device-token', '/api/auth/register', '/api/auth/users'],
-  users: ['/api/users', '/api/users/me', '/api/users/:id', '/api/users/:id/deactivate'],
+  auth: ['/api/auth/login', '/api/auth/signup', '/api/auth/device-token', '/api/auth/register', '/api/auth/users'],
+  users: [
+    '/api/users',
+    '/api/users/me',
+    '/api/users/me (PATCH)',
+    '/api/users/me/avatar',
+    '/api/users/me/face/status',
+    '/api/users/me/face/enroll',
+    '/api/users/:id',
+    '/api/users/:id/avatar',
+    '/api/users/:id/deactivate',
+  ],
   forms: [
     '/api/forms/questions',
     '/api/forms/questions/:id',
     '/api/forms/today',
     '/api/forms/submissions/today',
+    '/api/forms/submissions/me',
     '/api/forms/submissions/me/latest',
     '/api/forms/analytics/users',
     '/api/forms/analytics/users/:userId/history',

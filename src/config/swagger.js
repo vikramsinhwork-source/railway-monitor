@@ -43,8 +43,25 @@ const options = {
                 email: { type: 'string', nullable: true },
                 role: { type: 'string' },
                 status: { type: 'string' },
+                crew_type: { type: 'string', nullable: true },
+                head_quarter: { type: 'string', nullable: true },
+                mobile: { type: 'string', nullable: true },
+                profile_image_url: { type: 'string', nullable: true },
               },
             },
+          },
+        },
+        SignupRequest: {
+          type: 'object',
+          required: ['user_id', 'name', 'password'],
+          properties: {
+            user_id: { type: 'string', example: 'crew_001' },
+            name: { type: 'string', example: 'Ravi Kumar' },
+            password: { type: 'string' },
+            email: { type: 'string', nullable: true },
+            crew_type: { type: 'string', nullable: true },
+            head_quarter: { type: 'string', nullable: true },
+            mobile: { type: 'string', nullable: true },
           },
         },
         CreateUserRequest: {
@@ -54,6 +71,10 @@ const options = {
             user_id: { type: 'string' },
             name: { type: 'string' },
             password: { type: 'string' },
+            email: { type: 'string', nullable: true },
+            crew_type: { type: 'string', nullable: true },
+            head_quarter: { type: 'string', nullable: true },
+            mobile: { type: 'string', nullable: true },
           },
         },
         UserResponse: {
@@ -67,6 +88,21 @@ const options = {
             status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
+            crew_type: { type: 'string', nullable: true },
+            head_quarter: { type: 'string', nullable: true },
+            mobile: { type: 'string', nullable: true },
+            profile_image_url: { type: 'string', nullable: true, description: 'Public URL or presigned GET URL when avatar is set' },
+          },
+        },
+        PatchMeRequest: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            email: { type: 'string', nullable: true },
+            password: { type: 'string' },
+            crew_type: { type: 'string', nullable: true },
+            head_quarter: { type: 'string', nullable: true },
+            mobile: { type: 'string', nullable: true },
           },
         },
         UpdateUserRequest: {
@@ -75,12 +111,40 @@ const options = {
             name: { type: 'string' },
             email: { type: 'string', nullable: true },
             password: { type: 'string' },
+            crew_type: { type: 'string', nullable: true },
+            head_quarter: { type: 'string', nullable: true },
+            mobile: { type: 'string', nullable: true },
+            profile_image_key: {
+              type: 'string',
+              nullable: true,
+              description: 'Set to null to clear avatar (removes S3 object when configured)',
+            },
           },
         },
         ErrorResponse: {
           type: 'object',
           properties: {
             success: { type: 'boolean', example: false },
+            message: { type: 'string' },
+          },
+        },
+        FaceEnrollmentStatusResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            status: {
+              type: 'string',
+              enum: ['none', 'pending', 'active', 'failed'],
+              description: 'none = no enrollment record; otherwise DB status',
+            },
+            last_error: { type: 'string', nullable: true },
+          },
+        },
+        FaceEnrollSuccessResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            status: { type: 'string', example: 'active' },
             message: { type: 'string' },
           },
         },
@@ -167,6 +231,34 @@ spec.paths['/api/auth/login'] = {
       400: { description: 'Missing user_id or password', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       401: { description: 'Invalid credentials', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'Account inactive', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/auth/signup'] = {
+  post: {
+    tags: ['Auth'],
+    summary: 'Self-register (public)',
+    description:
+      'Creates a USER account in the database (not the legacy KIOSK/MONITOR in-memory register). Returns JWT like login.',
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/SignupRequest' },
+        },
+      },
+    },
+    responses: {
+      201: {
+        description: 'Account created',
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/LoginResponse' },
+          },
+        },
+      },
+      400: { description: 'Missing required fields', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      409: { description: 'user_id or email already exists', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };
@@ -258,6 +350,141 @@ spec.paths['/api/users/me'] = {
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
+  patch: {
+    tags: ['Users'],
+    summary: 'Update current user profile',
+    description:
+      'Updates name, email, password, crew_type, head_quarter, mobile. Cannot change role, status, user_id, or profile_image_key (use POST /api/users/me/avatar for photo).',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: false,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/PatchMeRequest' },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Profile updated',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                success: { type: 'boolean' },
+                user: { $ref: '#/components/schemas/UserResponse' },
+              },
+            },
+          },
+        },
+      },
+      400: { description: 'No valid fields, forbidden fields, or invalid payload', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      409: { description: 'Email conflict', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/users/me/avatar'] = {
+  post: {
+    tags: ['Users'],
+    summary: 'Upload profile avatar (current user)',
+    description: 'multipart/form-data with field **image** (JPEG, PNG, WebP, or GIF, max 5MB). Requires S3 env configuration on the server.',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'multipart/form-data': {
+          schema: {
+            type: 'object',
+            required: ['image'],
+            properties: {
+              image: { type: 'string', format: 'binary' },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Avatar updated',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                success: { type: 'boolean' },
+                user: { $ref: '#/components/schemas/UserResponse' },
+              },
+            },
+          },
+        },
+      },
+      400: { description: 'Missing or invalid file', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      502: { description: 'Upload failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      503: { description: 'Storage not configured', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/users/me/face/status'] = {
+  get: {
+    tags: ['Users'],
+    summary: 'Face enrollment status (current user)',
+    description: 'USER role only. Returns none until an enrollment row exists; then pending, active, or failed.',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: {
+        description: 'Enrollment state',
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/FaceEnrollmentStatusResponse' },
+          },
+        },
+      },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'USER role required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/users/me/face/enroll'] = {
+  post: {
+    tags: ['Users'],
+    summary: 'Enroll face reference (current user)',
+    description:
+      'USER role only. multipart/form-data field **image** (JPEG, PNG, WebP, or GIF, max 5MB). Uploads to S3, detects a single face, indexes into AWS Rekognition collection (AWS_REKOGNITION_COLLECTION_ID). Reference image is removed from S3 after successful indexing.',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'multipart/form-data': {
+          schema: {
+            type: 'object',
+            required: ['image'],
+            properties: {
+              image: { type: 'string', format: 'binary' },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Face indexed',
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/FaceEnrollSuccessResponse' },
+          },
+        },
+      },
+      400: { description: 'No face, multiple faces, or invalid image', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'USER role required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'User not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      502: { description: 'Upload or Rekognition error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      503: { description: 'S3 or Rekognition collection not configured', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
 };
 spec.paths['/api/users/{id}'] = {
   get: {
@@ -321,6 +548,53 @@ spec.paths['/api/users/{id}'] = {
       403: { description: 'Forbidden (cannot update ADMIN)', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       404: { description: 'User not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       409: { description: 'email or user_id already exists', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/users/{id}/avatar'] = {
+  post: {
+    tags: ['Users'],
+    summary: 'Upload user avatar (Admin only)',
+    description: 'Same as POST /api/users/me/avatar but for another user (non-ADMIN targets only).',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+    ],
+    requestBody: {
+      required: true,
+      content: {
+        'multipart/form-data': {
+          schema: {
+            type: 'object',
+            required: ['image'],
+            properties: {
+              image: { type: 'string', format: 'binary' },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Avatar updated',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                success: { type: 'boolean' },
+                user: { $ref: '#/components/schemas/UserResponse' },
+              },
+            },
+          },
+        },
+      },
+      400: { description: 'Missing or invalid file', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required or cannot set ADMIN avatar', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'User not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      502: { description: 'Upload failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      503: { description: 'Storage not configured', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };
@@ -465,6 +739,27 @@ spec.paths['/api/forms/submissions/today'] = {
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'User access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       404: { description: 'No active form found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/forms/submissions/me'] = {
+  get: {
+    tags: ['Forms'],
+    summary: 'My submission history (User only, paginated)',
+    description: 'Same submission shape as admin GET /api/forms/analytics/users/{userId}/history, scoped to the authenticated user.',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1 } },
+      { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+    ],
+    responses: {
+      200: { description: 'History page with user summary, answers, and pagination' },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'User access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'User not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };

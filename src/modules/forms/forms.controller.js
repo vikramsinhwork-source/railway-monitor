@@ -1,6 +1,7 @@
 import { Op, UniqueConstraintError } from 'sequelize';
 import sequelize from '../../config/sequelize.js';
 import User from '../users/user.model.js';
+import { toUserResponse } from '../users/userResponse.js';
 import { Form, Question, Submission, Answer } from './index.js';
 import { logInfo, logWarn } from '../../utils/logger.js';
 
@@ -89,6 +90,104 @@ function parseDateOnly(value) {
   const parsed = new Date(`${trimmed}T00:00:00.000Z`);
   if (Number.isNaN(parsed.getTime())) return null;
   return trimmed;
+}
+
+function parseSubmissionHistoryQuery(query) {
+  const page = parsePositiveInt(query.page, 1);
+  const limit = parsePositiveInt(query.limit, 20);
+  if (!page || !limit) {
+    return { error: { status: 400, message: 'page and limit must be positive integers' } };
+  }
+  if (limit > 100) {
+    return { error: { status: 400, message: 'limit cannot exceed 100' } };
+  }
+
+  const fromDate = parseDateOnly(query.from_date);
+  const toDate = parseDateOnly(query.to_date);
+  if ((query.from_date !== undefined && !fromDate) || (query.to_date !== undefined && !toDate)) {
+    return { error: { status: 400, message: 'from_date and to_date must be in YYYY-MM-DD format' } };
+  }
+  if (fromDate && toDate && fromDate > toDate) {
+    return { error: { status: 400, message: 'from_date cannot be after to_date' } };
+  }
+
+  return { page, limit, fromDate, toDate };
+}
+
+function submissionHistoryWhere(userPk, fromDate, toDate) {
+  const where = { user_id: userPk };
+  if (fromDate && toDate) {
+    where.submission_date = { [Op.between]: [fromDate, toDate] };
+  } else if (fromDate) {
+    where.submission_date = { [Op.gte]: fromDate };
+  } else if (toDate) {
+    where.submission_date = { [Op.lte]: toDate };
+  }
+  return where;
+}
+
+function mapSubmissionsToHistory(rows) {
+  return rows.map((submission) => {
+    const data = submission.get({ plain: true });
+    const answers = (data.answers || []).map((answer) => ({
+      id: answer.id,
+      answer_text: answer.answer_text,
+      created_at: answer.created_at,
+      question: answer.question
+        ? {
+            id: answer.question.id,
+            prompt: answer.question.prompt,
+            is_required: answer.question.is_required,
+            sort_order: answer.question.sort_order,
+          }
+        : null,
+    }));
+
+    return {
+      id: data.id,
+      submission_date: data.submission_date,
+      created_at: data.created_at,
+      updated_at: data.updated_at,
+      answers,
+    };
+  });
+}
+
+async function fetchSubmissionHistoryPage(userPk, { page, limit, fromDate, toDate }) {
+  const where = submissionHistoryWhere(userPk, fromDate, toDate);
+  const offset = (page - 1) * limit;
+  const { rows, count } = await Submission.findAndCountAll({
+    where,
+    include: [
+      {
+        model: Answer,
+        as: 'answers',
+        attributes: ['id', 'answer_text', 'created_at'],
+        include: [
+          {
+            model: Question,
+            as: 'question',
+            attributes: ['id', 'prompt', 'is_required', 'sort_order'],
+            paranoid: false,
+          },
+        ],
+      },
+    ],
+    order: [
+      ['submission_date', 'DESC'],
+      ['created_at', 'DESC'],
+      [{ model: Answer, as: 'answers' }, { model: Question, as: 'question' }, 'sort_order', 'ASC'],
+      [{ model: Answer, as: 'answers' }, 'created_at', 'ASC'],
+    ],
+    limit,
+    offset,
+    distinct: true,
+  });
+
+  return {
+    history: mapSubmissionsToHistory(rows),
+    total: count,
+  };
 }
 
 export async function createQuestion(req, res) {
@@ -476,7 +575,18 @@ export async function listUsersSubmissionAnalytics(req, res) {
     const offset = (page - 1) * limit;
     const { rows, count } = await User.findAndCountAll({
       where: userWhere,
-      attributes: ['id', 'user_id', 'name', 'email', 'status', 'created_at'],
+      attributes: [
+        'id',
+        'user_id',
+        'name',
+        'email',
+        'status',
+        'created_at',
+        'crew_type',
+        'head_quarter',
+        'mobile',
+        'profile_image_key',
+      ],
       include: [
         {
           model: Submission,
@@ -492,22 +602,29 @@ export async function listUsersSubmissionAnalytics(req, res) {
       distinct: true,
     });
 
-    const users = rows.map((user) => {
-      const userData = user.get({ plain: true });
-      const submissions = Array.isArray(userData.submissions) ? userData.submissions : [];
-      const submissionDates = submissions.map((submission) => submission.submission_date).filter(Boolean);
-      const latestSubmissionDate = submissionDates.length ? submissionDates.sort().at(-1) : null;
+    const users = await Promise.all(
+      rows.map(async (user) => {
+        const userData = user.get({ plain: true });
+        const submissions = Array.isArray(userData.submissions) ? userData.submissions : [];
+        const submissionDates = submissions.map((submission) => submission.submission_date).filter(Boolean);
+        const latestSubmissionDate = submissionDates.length ? submissionDates.sort().at(-1) : null;
 
-      return {
-        id: userData.id,
-        user_id: userData.user_id,
-        name: userData.name,
-        email: userData.email,
-        status: userData.status,
-        submission_count: submissions.length,
-        latest_submission_date: latestSubmissionDate,
-      };
-    });
+        const publicUser = await toUserResponse(user);
+        return {
+          id: publicUser.id,
+          user_id: publicUser.user_id,
+          name: publicUser.name,
+          email: publicUser.email,
+          status: publicUser.status,
+          crew_type: publicUser.crew_type,
+          head_quarter: publicUser.head_quarter,
+          mobile: publicUser.mobile,
+          profile_image_url: publicUser.profile_image_url,
+          submission_count: submissions.length,
+          latest_submission_date: latestSubmissionDate,
+        };
+      })
+    );
 
     return res.json({
       success: true,
@@ -534,39 +651,63 @@ export async function listUsersSubmissionAnalytics(req, res) {
   }
 }
 
+export async function getMySubmissionHistory(req, res) {
+  try {
+    const parsed = parseSubmissionHistoryQuery(req.query);
+    if (parsed.error) {
+      return res.status(parsed.error.status).json({ success: false, message: parsed.error.message });
+    }
+    const { page, limit, fromDate, toDate } = parsed;
+
+    const user = await User.findByPk(req.auth.userId, {
+      attributes: [
+        'id',
+        'user_id',
+        'name',
+        'email',
+        'status',
+        'crew_type',
+        'head_quarter',
+        'mobile',
+        'profile_image_key',
+      ],
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const { history, total } = await fetchSubmissionHistoryPage(user.id, { page, limit, fromDate, toDate });
+
+    return res.json({
+      success: true,
+      user: await toUserResponse(user),
+      history,
+      pagination: {
+        page,
+        limit,
+        total,
+        total_pages: Math.ceil(total / limit),
+      },
+      filters: {
+        from_date: fromDate,
+        to_date: toDate,
+      },
+    });
+  } catch (err) {
+    logWarn('Forms', 'Get my submission history error', { error: err.message, userId: req.auth?.userId });
+    return res.status(500).json({ success: false, message: 'Failed to fetch submission history' });
+  }
+}
+
 export async function getUserSubmissionHistory(req, res) {
   try {
     const { userId } = req.params;
 
-    const page = parsePositiveInt(req.query.page, 1);
-    const limit = parsePositiveInt(req.query.limit, 20);
-    if (!page || !limit) {
-      return res.status(400).json({
-        success: false,
-        message: 'page and limit must be positive integers',
-      });
+    const parsed = parseSubmissionHistoryQuery(req.query);
+    if (parsed.error) {
+      return res.status(parsed.error.status).json({ success: false, message: parsed.error.message });
     }
-    if (limit > 100) {
-      return res.status(400).json({
-        success: false,
-        message: 'limit cannot exceed 100',
-      });
-    }
-
-    const fromDate = parseDateOnly(req.query.from_date);
-    const toDate = parseDateOnly(req.query.to_date);
-    if ((req.query.from_date !== undefined && !fromDate) || (req.query.to_date !== undefined && !toDate)) {
-      return res.status(400).json({
-        success: false,
-        message: 'from_date and to_date must be in YYYY-MM-DD format',
-      });
-    }
-    if (fromDate && toDate && fromDate > toDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'from_date cannot be after to_date',
-      });
-    }
+    const { page, limit, fromDate, toDate } = parsed;
 
     const userWhere = { role: 'USER' };
     if (isValidUuid(userId)) {
@@ -577,84 +718,33 @@ export async function getUserSubmissionHistory(req, res) {
 
     const user = await User.findOne({
       where: userWhere,
-      attributes: ['id', 'user_id', 'name', 'email', 'status'],
+      attributes: [
+        'id',
+        'user_id',
+        'name',
+        'email',
+        'status',
+        'crew_type',
+        'head_quarter',
+        'mobile',
+        'profile_image_key',
+      ],
     });
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const where = { user_id: user.id };
-    if (fromDate && toDate) {
-      where.submission_date = { [Op.between]: [fromDate, toDate] };
-    } else if (fromDate) {
-      where.submission_date = { [Op.gte]: fromDate };
-    } else if (toDate) {
-      where.submission_date = { [Op.lte]: toDate };
-    }
-
-    const offset = (page - 1) * limit;
-    const { rows, count } = await Submission.findAndCountAll({
-      where,
-      include: [
-        {
-          model: Answer,
-          as: 'answers',
-          attributes: ['id', 'answer_text', 'created_at'],
-          include: [
-            {
-              model: Question,
-              as: 'question',
-              attributes: ['id', 'prompt', 'is_required', 'sort_order'],
-              paranoid: false,
-            },
-          ],
-        },
-      ],
-      order: [
-        ['submission_date', 'DESC'],
-        ['created_at', 'DESC'],
-        [{ model: Answer, as: 'answers' }, { model: Question, as: 'question' }, 'sort_order', 'ASC'],
-        [{ model: Answer, as: 'answers' }, 'created_at', 'ASC'],
-      ],
-      limit,
-      offset,
-      distinct: true,
-    });
-
-    const history = rows.map((submission) => {
-      const data = submission.get({ plain: true });
-      const answers = (data.answers || []).map((answer) => ({
-        id: answer.id,
-        answer_text: answer.answer_text,
-        created_at: answer.created_at,
-        question: answer.question
-          ? {
-              id: answer.question.id,
-              prompt: answer.question.prompt,
-              is_required: answer.question.is_required,
-              sort_order: answer.question.sort_order,
-            }
-          : null,
-      }));
-
-      return {
-        id: data.id,
-        submission_date: data.submission_date,
-        created_at: data.created_at,
-        updated_at: data.updated_at,
-        answers,
-      };
-    });
+    const { history, total } = await fetchSubmissionHistoryPage(user.id, { page, limit, fromDate, toDate });
 
     return res.json({
       success: true,
-      user: user.get({ plain: true }),
+      user: await toUserResponse(user),
       history,
       pagination: {
         page,
         limit,
-        total: count,
-        total_pages: Math.ceil(count / limit),
+        total,
+        total_pages: Math.ceil(total / limit),
       },
       filters: {
         from_date: fromDate,

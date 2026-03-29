@@ -1,5 +1,5 @@
 /**
- * Auth controller: POST /api/auth/login with user_id + password.
+ * Auth controller: POST /api/auth/login, POST /api/auth/signup.
  * Returns JWT with userId, role; response: accessToken, role, user.
  */
 
@@ -7,8 +7,66 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import User from '../users/user.model.js';
 import { logInfo, logWarn } from '../../utils/logger.js';
+import { toUserResponse } from '../users/userResponse.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-production';
+
+function signAccessToken(user) {
+  const payload = {
+    userId: user.id,
+    role: user.role,
+    user_id: user.user_id,
+    name: user.name,
+  };
+  return jwt.sign(payload, JWT_SECRET);
+}
+
+export async function signup(req, res) {
+  try {
+    const { user_id, name, password, email, crew_type, head_quarter, mobile } = req.body || {};
+
+    if (!user_id || !name || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'user_id, name, and password are required',
+      });
+    }
+
+    const password_hash = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      user_id,
+      name,
+      email: email !== undefined ? email || null : null,
+      password_hash,
+      role: 'USER',
+      status: 'ACTIVE',
+      created_by: null,
+      crew_type: crew_type !== undefined ? crew_type || null : null,
+      head_quarter: head_quarter !== undefined ? head_quarter || null : null,
+      mobile: mobile !== undefined ? mobile || null : null,
+    });
+
+    logInfo('Auth', 'Self-signup', { user_id: user.user_id });
+
+    const accessToken = signAccessToken(user);
+
+    return res.status(201).json({
+      success: true,
+      accessToken,
+      role: user.role,
+      user: await toUserResponse(user),
+    });
+  } catch (err) {
+    if (err.name === 'SequelizeUniqueConstraintError') {
+      return res.status(409).json({
+        success: false,
+        message: 'user_id or email already exists',
+      });
+    }
+    logWarn('Auth', 'Signup error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Signup failed' });
+  }
+}
 
 export async function login(req, res) {
   try {
@@ -47,17 +105,7 @@ export async function login(req, res) {
       });
     }
 
-    const payload = {
-      userId: user.id,
-      role: user.role,
-      user_id: user.user_id,
-      name: user.name,
-    };
-    // No expiresIn = lifetime token (never expires)
-const accessToken = jwt.sign(payload, JWT_SECRET);
-
-    const userPojo = user.get({ plain: true });
-    delete userPojo.password_hash;
+    const accessToken = signAccessToken(user);
 
     logInfo('Auth', 'Login success', { user_id: user.user_id, role: user.role });
 
@@ -65,14 +113,7 @@ const accessToken = jwt.sign(payload, JWT_SECRET);
       success: true,
       accessToken,
       role: user.role,
-      user: {
-        id: user.id,
-        user_id: user.user_id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        status: user.status,
-      },
+      user: await toUserResponse(user),
     });
   } catch (err) {
     logWarn('Auth', 'Login error', { error: err.message });
