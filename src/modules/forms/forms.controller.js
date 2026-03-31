@@ -10,6 +10,41 @@ function isValidUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+const STAFF_TYPES = ['ALP', 'LP', 'TM'];
+const DUTY_TYPES = ['SIGN_IN', 'SIGN_OFF'];
+
+function normalizeEnumValue(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.toUpperCase();
+}
+
+function parseFormContext({ staffType, dutyType }, { source = 'query' } = {}) {
+  const normalizedStaffType = normalizeEnumValue(staffType);
+  const normalizedDutyType = normalizeEnumValue(dutyType);
+
+  if (!normalizedStaffType) {
+    return { error: `${source}.staffType is required` };
+  }
+  if (!STAFF_TYPES.includes(normalizedStaffType)) {
+    return { error: `${source}.staffType must be one of ${STAFF_TYPES.join(', ')}` };
+  }
+  if (!normalizedDutyType) {
+    return { error: `${source}.dutyType is required` };
+  }
+  if (!DUTY_TYPES.includes(normalizedDutyType)) {
+    return { error: `${source}.dutyType must be one of ${DUTY_TYPES.join(', ')}` };
+  }
+
+  return {
+    context: {
+      staffType: normalizedStaffType,
+      dutyType: normalizedDutyType,
+    },
+  };
+}
+
 function parseQuestionPayload(body, { partial = false } = {}) {
   const updates = {};
 
@@ -45,8 +80,47 @@ function parseQuestionPayload(body, { partial = false } = {}) {
   return { updates };
 }
 
+function parseTemplatePayload(body) {
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
+  if (!title) {
+    return { error: 'title is required and must be a non-empty string' };
+  }
+
+  const { context, error } = parseFormContext(
+    {
+      staffType: body.staffType ?? body.staff_type,
+      dutyType: body.dutyType ?? body.duty_type,
+    },
+    { source: 'body' }
+  );
+  if (error) {
+    return { error };
+  }
+
+  const description = body.description == null ? null : String(body.description).trim() || null;
+  return {
+    payload: {
+      title,
+      description,
+      staff_type: context.staffType,
+      duty_type: context.dutyType,
+      is_active: false,
+    },
+  };
+}
+
 async function getActiveForm() {
   return Form.findOne({ where: { is_active: true } });
+}
+
+async function getActiveFormByContext({ staffType, dutyType }) {
+  return Form.findOne({
+    where: {
+      is_active: true,
+      staff_type: staffType,
+      duty_type: dutyType,
+    },
+  });
 }
 
 async function getOrCreateActiveForm() {
@@ -323,9 +397,17 @@ export async function deleteQuestion(req, res) {
 
 export async function getTodayQuestions(req, res) {
   try {
-    const activeForm = await getActiveForm();
+    const { context, error } = parseFormContext(req.query, { source: 'query' });
+    if (error) {
+      return res.status(400).json({ success: false, message: error });
+    }
+
+    const activeForm = await getActiveFormByContext(context);
     if (!activeForm) {
-      return res.json({ success: true, questions: [] });
+      return res.status(404).json({
+        success: false,
+        message: `No active form found for staffType=${context.staffType} and dutyType=${context.dutyType}`,
+      });
     }
 
     const questions = await Question.findAll({
@@ -340,6 +422,8 @@ export async function getTodayQuestions(req, res) {
         id: activeForm.id,
         title: activeForm.title,
         description: activeForm.description,
+        staff_type: activeForm.staff_type,
+        duty_type: activeForm.duty_type,
       },
       questions,
       submission_date: getTodayDateOnly(),
@@ -355,6 +439,12 @@ export async function submitTodayAnswers(req, res) {
   try {
     const userId = req.auth?.userId;
     const submissionDate = getTodayDateOnly();
+    const { context, error } = parseFormContext(req.body, { source: 'body' });
+    if (error) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: error });
+    }
+
     const payloadAnswers = req.body?.answers;
 
     if (!Array.isArray(payloadAnswers) || payloadAnswers.length === 0) {
@@ -362,10 +452,13 @@ export async function submitTodayAnswers(req, res) {
       return res.status(400).json({ success: false, message: 'answers must be a non-empty array' });
     }
 
-    const activeForm = await getActiveForm();
+    const activeForm = await getActiveFormByContext(context);
     if (!activeForm) {
       await tx.rollback();
-      return res.status(404).json({ success: false, message: 'No active form found for today' });
+      return res.status(404).json({
+        success: false,
+        message: `No active form found for staffType=${context.staffType} and dutyType=${context.dutyType}`,
+      });
     }
 
     const questions = await Question.findAll({
@@ -449,6 +542,8 @@ export async function submitTodayAnswers(req, res) {
       userId,
       submissionId: submission.id,
       submissionDate,
+      staffType: context.staffType,
+      dutyType: context.dutyType,
       answerCount: answers.length,
     });
 
@@ -758,5 +853,218 @@ export async function getUserSubmissionHistory(req, res) {
       adminUserId: req.auth?.userId,
     });
     return res.status(500).json({ success: false, message: 'Failed to fetch user history' });
+  }
+}
+
+export async function createTemplate(req, res) {
+  try {
+    const { payload, error } = parseTemplatePayload(req.body || {});
+    if (error) {
+      return res.status(400).json({ success: false, message: error });
+    }
+
+    const template = await Form.create(payload);
+    logInfo('Forms', 'Template created', {
+      templateId: template.id,
+      staffType: template.staff_type,
+      dutyType: template.duty_type,
+      createdBy: req.auth.userId,
+    });
+
+    return res.status(201).json({ success: true, template: template.get({ plain: true }) });
+  } catch (err) {
+    logWarn('Forms', 'Create template error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to create template' });
+  }
+}
+
+export async function listTemplates(req, res) {
+  try {
+    const where = {};
+    if (req.query.staffType !== undefined || req.query.dutyType !== undefined) {
+      const { context, error } = parseFormContext(req.query, { source: 'query' });
+      if (error) {
+        return res.status(400).json({ success: false, message: error });
+      }
+      where.staff_type = context.staffType;
+      where.duty_type = context.dutyType;
+    }
+
+    if (req.query.isActive !== undefined) {
+      const value = String(req.query.isActive).trim().toLowerCase();
+      if (!['true', 'false'].includes(value)) {
+        return res.status(400).json({ success: false, message: 'query.isActive must be true or false' });
+      }
+      where.is_active = value === 'true';
+    }
+
+    const templates = await Form.findAll({
+      where,
+      include: [
+        {
+          model: Question,
+          as: 'questions',
+          attributes: ['id'],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+
+    return res.json({
+      success: true,
+      templates: templates.map((template) => {
+        const plain = template.get({ plain: true });
+        return {
+          ...plain,
+          question_count: Array.isArray(plain.questions) ? plain.questions.length : 0,
+        };
+      }),
+    });
+  } catch (err) {
+    logWarn('Forms', 'List templates error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to list templates' });
+  }
+}
+
+export async function publishTemplate(req, res) {
+  const tx = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    if (!isValidUuid(id)) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'Invalid template id' });
+    }
+
+    const template = await Form.findByPk(id, { transaction: tx, lock: tx.LOCK.UPDATE });
+    if (!template) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Template not found' });
+    }
+
+    await Form.update(
+      { is_active: false },
+      {
+        where: {
+          staff_type: template.staff_type,
+          duty_type: template.duty_type,
+          id: { [Op.ne]: template.id },
+        },
+        transaction: tx,
+      }
+    );
+
+    await template.update({ is_active: true }, { transaction: tx });
+    await tx.commit();
+
+    logInfo('Forms', 'Template published', {
+      templateId: template.id,
+      staffType: template.staff_type,
+      dutyType: template.duty_type,
+      publishedBy: req.auth.userId,
+    });
+
+    return res.json({ success: true, template: template.get({ plain: true }) });
+  } catch (err) {
+    await tx.rollback();
+    logWarn('Forms', 'Publish template error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to publish template' });
+  }
+}
+
+async function getTemplateById(templateId) {
+  if (!isValidUuid(templateId)) {
+    return { error: { status: 400, message: 'Invalid template id' } };
+  }
+  const template = await Form.findByPk(templateId);
+  if (!template) {
+    return { error: { status: 404, message: 'Template not found' } };
+  }
+  return { template };
+}
+
+async function getTemplateQuestion(templateId, questionId) {
+  const { template, error: templateError } = await getTemplateById(templateId);
+  if (templateError) return { error: templateError };
+  if (!isValidUuid(questionId)) {
+    return { error: { status: 400, message: 'Invalid question id' } };
+  }
+
+  const question = await Question.findOne({ where: { id: questionId, form_id: template.id } });
+  if (!question) {
+    return { error: { status: 404, message: 'Question not found for template' } };
+  }
+  return { template, question };
+}
+
+export async function createTemplateQuestion(req, res) {
+  try {
+    const { template, error } = await getTemplateById(req.params.templateId);
+    if (error) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
+
+    const { updates, error: payloadError } = parseQuestionPayload(req.body || {});
+    if (payloadError) {
+      return res.status(400).json({ success: false, message: payloadError });
+    }
+
+    const question = await Question.create({ ...updates, form_id: template.id });
+    return res.status(201).json({ success: true, question: question.get({ plain: true }) });
+  } catch (err) {
+    logWarn('Forms', 'Create template question error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to create template question' });
+  }
+}
+
+export async function listTemplateQuestions(req, res) {
+  try {
+    const { template, error } = await getTemplateById(req.params.templateId);
+    if (error) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
+
+    const questions = await Question.findAll({
+      where: { form_id: template.id },
+      order: [['sort_order', 'ASC'], ['created_at', 'ASC']],
+    });
+
+    return res.json({ success: true, questions });
+  } catch (err) {
+    logWarn('Forms', 'List template questions error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to list template questions' });
+  }
+}
+
+export async function updateTemplateQuestion(req, res) {
+  try {
+    const { question, error } = await getTemplateQuestion(req.params.templateId, req.params.questionId);
+    if (error) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
+
+    const { updates, error: payloadError } = parseQuestionPayload(req.body || {}, { partial: true });
+    if (payloadError) {
+      return res.status(400).json({ success: false, message: payloadError });
+    }
+
+    await question.update(updates);
+    return res.json({ success: true, question: question.get({ plain: true }) });
+  } catch (err) {
+    logWarn('Forms', 'Update template question error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to update template question' });
+  }
+}
+
+export async function deleteTemplateQuestion(req, res) {
+  try {
+    const { question, error } = await getTemplateQuestion(req.params.templateId, req.params.questionId);
+    if (error) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
+    await question.destroy();
+    return res.json({ success: true, message: 'Question deleted successfully' });
+  } catch (err) {
+    logWarn('Forms', 'Delete template question error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to delete template question' });
   }
 }

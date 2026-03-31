@@ -8,6 +8,7 @@ import { swaggerUiHandler, swaggerUiSetup } from './config/swagger.js';
 import { authenticateSocket } from './auth/auth.middleware.js';
 import { initializeSocket } from './socket/index.js';
 import { seedAdmin } from './bootstrap/seedAdmin.js';
+import { seedRoleDutyTemplates } from './bootstrap/seedRoleDutyTemplates.js';
 import { logInfo, logWarn, logError } from './utils/logger.js';
 import authRoutes from './auth/auth.routes.js';
 import './modules/users/userFaceProfile.model.js';
@@ -34,6 +35,7 @@ async function initDB() {
     await sequelize.sync({ alter: true });
     logInfo('DB', 'Sequelize synced');
     await seedAdmin();
+    await seedRoleDutyTemplates();
   } catch (err) {
     logError('DB', 'Init failed', { error: err.message });
     throw err;

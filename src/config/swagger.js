@@ -178,6 +178,29 @@ const options = {
             sort_order: { type: 'integer', minimum: 0 },
           },
         },
+        FormTemplate: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            title: { type: 'string' },
+            description: { type: 'string', nullable: true },
+            staff_type: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+            duty_type: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+            is_active: { type: 'boolean' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateTemplateRequest: {
+          type: 'object',
+          required: ['title', 'staffType', 'dutyType'],
+          properties: {
+            title: { type: 'string' },
+            description: { type: 'string', nullable: true },
+            staffType: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+            dutyType: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+          },
+        },
         TodayAnswerItem: {
           type: 'object',
           required: ['question_id', 'answer_text'],
@@ -188,11 +211,84 @@ const options = {
         },
         TodaySubmissionRequest: {
           type: 'object',
-          required: ['answers'],
+          required: ['staffType', 'dutyType', 'answers'],
           properties: {
+            staffType: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+            dutyType: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
             answers: {
               type: 'array',
               items: { $ref: '#/components/schemas/TodayAnswerItem' },
+            },
+          },
+        },
+        TodayQuestionsResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            form: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                title: { type: 'string' },
+                description: { type: 'string', nullable: true },
+                staff_type: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+                duty_type: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+              },
+            },
+            questions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  prompt: { type: 'string' },
+                  is_required: { type: 'boolean' },
+                  sort_order: { type: 'integer' },
+                },
+              },
+            },
+            submission_date: { type: 'string', format: 'date' },
+          },
+        },
+        TodaySubmissionResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            submission: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', format: 'uuid' },
+                user_id: { type: 'string', format: 'uuid' },
+                form_id: { type: 'string', format: 'uuid' },
+                submission_date: { type: 'string', format: 'date' },
+                created_at: { type: 'string', format: 'date-time' },
+                updated_at: { type: 'string', format: 'date-time' },
+              },
+            },
+            answers: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  submission_id: { type: 'string', format: 'uuid' },
+                  question_id: { type: 'string', format: 'uuid' },
+                  answer_text: { type: 'string' },
+                  created_at: { type: 'string', format: 'date-time' },
+                  updated_at: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+          },
+        },
+        RequiredQuestionsErrorResponse: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            message: { type: 'string', example: 'All required questions must be answered' },
+            missing_required_question_ids: {
+              type: 'array',
+              items: { type: 'string', format: 'uuid' },
             },
           },
         },
@@ -627,11 +723,64 @@ spec.paths['/api/users/{id}/deactivate'] = {
     },
   },
 };
-spec.paths['/api/forms/questions'] = {
+spec.paths['/api/forms/templates'] = {
   post: {
     tags: ['Forms'],
-    summary: 'Create form question (Admin only)',
+    summary: 'Create form template (Admin only)',
     security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/CreateTemplateRequest' },
+        },
+      },
+    },
+    responses: {
+      201: { description: 'Template created' },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  get: {
+    tags: ['Forms'],
+    summary: 'List form templates (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'staffType', in: 'query', schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] } },
+      { name: 'dutyType', in: 'query', schema: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] } },
+      { name: 'isActive', in: 'query', schema: { type: 'boolean' } },
+    ],
+    responses: {
+      200: { description: 'Template list' },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/forms/templates/{id}/publish'] = {
+  patch: {
+    tags: ['Forms'],
+    summary: 'Publish template for role-duty pair (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Template published' },
+      400: { description: 'Invalid template id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Template not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/forms/templates/{templateId}/questions'] = {
+  post: {
+    tags: ['Forms'],
+    summary: 'Create question under template (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'templateId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
     requestBody: {
       required: true,
       content: {
@@ -645,39 +794,32 @@ spec.paths['/api/forms/questions'] = {
       400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      404: { description: 'No active form found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Template not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
   get: {
     tags: ['Forms'],
-    summary: 'List form questions (Admin only)',
+    summary: 'List questions under template (Admin only)',
     security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'templateId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
     responses: {
       200: { description: 'Question list' },
+      400: { description: 'Invalid template id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Template not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };
-spec.paths['/api/forms/questions/{id}'] = {
-  get: {
-    tags: ['Forms'],
-    summary: 'Get question by ID (Admin only)',
-    security: [{ bearerAuth: [] }],
-    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
-    responses: {
-      200: { description: 'Question detail' },
-      400: { description: 'Invalid question id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      404: { description: 'Question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-    },
-  },
+spec.paths['/api/forms/templates/{templateId}/questions/{questionId}'] = {
   patch: {
     tags: ['Forms'],
-    summary: 'Update question (Admin only)',
+    summary: 'Update template question (Admin only)',
     security: [{ bearerAuth: [] }],
-    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    parameters: [
+      { name: 'templateId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'questionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+    ],
     requestBody: {
       required: true,
       content: {
@@ -691,39 +833,59 @@ spec.paths['/api/forms/questions/{id}'] = {
       400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      404: { description: 'Question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Template or question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
   delete: {
     tags: ['Forms'],
-    summary: 'Delete question (Admin only)',
+    summary: 'Delete template question (Admin only)',
     security: [{ bearerAuth: [] }],
-    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    parameters: [
+      { name: 'templateId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'questionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+    ],
     responses: {
       200: { description: 'Question deleted' },
-      400: { description: 'Invalid question id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      400: { description: 'Invalid id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      404: { description: 'Question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Template or question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };
 spec.paths['/api/forms/today'] = {
   get: {
     tags: ['Forms'],
-    summary: "Get today's active form questions (User only)",
+    summary: "Get today's active form questions for staff and duty context (User only)",
+    description:
+      'Returns questions from the currently active template for the given `staffType` + `dutyType` pair. Pair matching is case-insensitive and normalized to uppercase on the backend.',
     security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'staffType', in: 'query', required: true, schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] } },
+      { name: 'dutyType', in: 'query', required: true, schema: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] } },
+    ],
     responses: {
-      200: { description: 'Today form and questions' },
+      200: {
+        description: 'Today form and questions for the requested role+duty pair',
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/TodayQuestionsResponse' },
+          },
+        },
+      },
+      400: { description: 'Missing or invalid staffType/dutyType', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'User access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'No active form found for this context', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };
 spec.paths['/api/forms/submissions/today'] = {
   post: {
     tags: ['Forms'],
-    summary: "Submit today's answers (User only)",
+    summary: "Submit today's answers with staff and duty context (User only)",
+    description:
+      'Creates a submission against the active template for the given `staffType` + `dutyType`. Validates duplicate question answers, active-question membership, and required-question completion for that template.',
     security: [{ bearerAuth: [] }],
     requestBody: {
       required: true,
@@ -734,11 +896,31 @@ spec.paths['/api/forms/submissions/today'] = {
       },
     },
     responses: {
-      201: { description: 'Submission created' },
-      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      201: {
+        description: 'Submission created',
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/TodaySubmissionResponse' },
+          },
+        },
+      },
+      400: {
+        description:
+          'Validation error (examples: invalid enum, empty answers, invalid UUID, duplicate question answers, answer not in active template, required questions missing)',
+        content: {
+          'application/json': {
+            schema: {
+              oneOf: [
+                { $ref: '#/components/schemas/ErrorResponse' },
+                { $ref: '#/components/schemas/RequiredQuestionsErrorResponse' },
+              ],
+            },
+          },
+        },
+      },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'User access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      404: { description: 'No active form found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'No active form found for this context', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };
