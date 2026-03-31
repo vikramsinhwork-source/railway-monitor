@@ -1975,7 +1975,7 @@ export const initializeSocket = (io) => {
     /**
      * Handle socket errors
      * Never crash the server
-     * Emit all errors to Flutter client
+     * Emit all errors to the connected client
      */
     socket.on('error', (error) => {
       logError('Socket', 'Socket error occurred', {
@@ -1989,7 +1989,7 @@ export const initializeSocket = (io) => {
         errorCode: error.code
       });
       
-      // Emit error to Flutter client
+      // Emit error to the connected client
       emitError(socket, ERROR_CODES.INTERNAL_ERROR, 'Socket error occurred', {
         error: error.message,
         errorName: error.name,

@@ -17,6 +17,16 @@ const Form = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    staff_type: {
+      type: DataTypes.ENUM('ALP', 'LP', 'TM'),
+      allowNull: false,
+      defaultValue: 'ALP',
+    },
+    duty_type: {
+      type: DataTypes.ENUM('SIGN_IN', 'SIGN_OFF'),
+      allowNull: false,
+      defaultValue: 'SIGN_IN',
+    },
     is_active: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
@@ -31,9 +41,13 @@ const Form = sequelize.define(
     indexes: [
       {
         unique: true,
-        fields: ['is_active'],
+        fields: ['staff_type', 'duty_type'],
         where: { is_active: true },
-        name: 'forms_one_active_form_idx',
+        name: 'forms_one_active_per_staff_duty_idx',
+      },
+      {
+        fields: ['staff_type', 'duty_type', 'is_active'],
+        name: 'forms_staff_duty_active_lookup_idx',
       },
     ],
   }

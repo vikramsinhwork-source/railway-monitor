@@ -46,6 +46,22 @@ const User = sequelize.define(
       type: DataTypes.UUID,
       allowNull: true,
     },
+    crew_type: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    head_quarter: {
+      type: DataTypes.STRING(200),
+      allowNull: true,
+    },
+    mobile: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+    },
+    profile_image_key: {
+      type: DataTypes.STRING(500),
+      allowNull: true,
+    },
   },
   {
     tableName: 'users',

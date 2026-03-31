@@ -50,7 +50,7 @@ export const emitError = (socket, code, message, details = {}) => {
   const error = createError(code, message, details);
   
   // Enhanced logging with full context for debugging
-  logError('Error', 'Socket error emitted to Flutter client', {
+  logError('Error', 'Socket error emitted to client', {
     code,
     message,
     clientId: socket.data?.clientId || 'unknown',
@@ -61,8 +61,7 @@ export const emitError = (socket, code, message, details = {}) => {
     ...details
   });
   
-  // Emit error to Flutter client
-  // Flutter apps should listen for 'error' event on socket
+  // Emit error to the connected client (clients should listen for the 'error' event)
   socket.emit('error', error);
   
   return error;

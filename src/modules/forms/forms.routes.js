@@ -4,6 +4,14 @@ import * as formsController from './forms.controller.js';
 
 const router = express.Router();
 
+router.post('/templates', requireAuth, requireAdmin, formsController.createTemplate);
+router.get('/templates', requireAuth, requireAdmin, formsController.listTemplates);
+router.patch('/templates/:id/publish', requireAuth, requireAdmin, formsController.publishTemplate);
+router.post('/templates/:templateId/questions', requireAuth, requireAdmin, formsController.createTemplateQuestion);
+router.get('/templates/:templateId/questions', requireAuth, requireAdmin, formsController.listTemplateQuestions);
+router.patch('/templates/:templateId/questions/:questionId', requireAuth, requireAdmin, formsController.updateTemplateQuestion);
+router.delete('/templates/:templateId/questions/:questionId', requireAuth, requireAdmin, formsController.deleteTemplateQuestion);
+
 router.post('/questions', requireAuth, requireAdmin, formsController.createQuestion);
 router.get('/questions', requireAuth, requireAdmin, formsController.listQuestions);
 router.get('/questions/:id', requireAuth, requireAdmin, formsController.getQuestionById);
@@ -14,5 +22,6 @@ router.get('/analytics/users/:userId/history', requireAuth, requireAdmin, formsC
 router.get('/today', requireAuth, requireUser, formsController.getTodayQuestions);
 router.post('/submissions/today', requireAuth, requireUser, formsController.submitTodayAnswers);
 router.get('/submissions/me/latest', requireAuth, requireUser, formsController.getMyLatestSubmission);
+router.get('/submissions/me', requireAuth, requireUser, formsController.getMySubmissionHistory);
 
 export default router;
