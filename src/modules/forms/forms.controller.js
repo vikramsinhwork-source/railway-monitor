@@ -3,7 +3,7 @@ import sequelize from '../../config/sequelize.js';
 import User from '../users/user.model.js';
 import { toUserResponse } from '../users/userResponse.js';
 import { Form, Question, Submission, Answer } from './index.js';
-import { logInfo, logWarn } from '../../utils/logger.js';
+import { logInfo, logWarn, logError } from '../../utils/logger.js';
 
 function isValidUuid(value) {
   if (typeof value !== 'string') return false;
@@ -429,7 +429,12 @@ export async function getTodayQuestions(req, res) {
       submission_date: getTodayDateOnly(),
     });
   } catch (err) {
-    logWarn('Forms', 'Get today questions error', { error: err.message, userId: req.auth?.userId });
+    const sqlDetail = err.parent?.message || err.original?.message;
+    logError('Forms', 'Get today questions error', {
+      error: err.message,
+      ...(sqlDetail && sqlDetail !== err.message ? { sqlMessage: sqlDetail } : {}),
+      userId: req.auth?.userId,
+    });
     return res.status(500).json({ success: false, message: 'Failed to fetch today questions' });
   }
 }
