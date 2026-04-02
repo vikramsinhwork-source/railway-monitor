@@ -88,6 +88,7 @@ logInfo('Server', 'Auth and user routes registered', {
     '/api/forms/submissions/today',
     '/api/forms/submissions/me',
     '/api/forms/submissions/me/latest',
+    '/api/forms/analytics/summary',
     '/api/forms/analytics/users',
     '/api/forms/analytics/users/:userId/history',
   ]

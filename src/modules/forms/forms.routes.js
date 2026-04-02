@@ -17,6 +17,7 @@ router.get('/questions', requireAuth, requireAdmin, formsController.listQuestion
 router.get('/questions/:id', requireAuth, requireAdmin, formsController.getQuestionById);
 router.patch('/questions/:id', requireAuth, requireAdmin, formsController.updateQuestion);
 router.delete('/questions/:id', requireAuth, requireAdmin, formsController.deleteQuestion);
+router.get('/analytics/summary', requireAuth, requireAdmin, formsController.getSubmissionAnalyticsSummary);
 router.get('/analytics/users', requireAuth, requireAdmin, formsController.listUsersSubmissionAnalytics);
 router.get('/analytics/users/:userId/history', requireAuth, requireAdmin, formsController.getUserSubmissionHistory);
 router.get('/today', requireAuth, requireUser, formsController.getTodayQuestions);

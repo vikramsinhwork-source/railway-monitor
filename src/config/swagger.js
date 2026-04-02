@@ -957,6 +957,28 @@ spec.paths['/api/forms/submissions/me/latest'] = {
     },
   },
 };
+spec.paths['/api/forms/analytics/summary'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Rich submission analytics for dashboards (Admin only)',
+    description:
+      'Aggregates over submissions joined to forms. Optional from_date/to_date (YYYY-MM-DD); omitted bounds behave like other analytics (all-time when both omitted). Response includes: totals; by_staff_duty; submissions_by_date (daily volume); by_staff_duty_by_date (stacked/multi-series charts); by_form (per template row including inactive versions); participation (ACTIVE USER roster vs distinct active users who submitted in the filter window); meta (first/last submission_date in window, day count).',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+    ],
+    responses: {
+      200: {
+        description:
+          'Dashboard payload: totals, by_staff_duty, submissions_by_date, by_staff_duty_by_date, by_form, participation, meta',
+      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
 spec.paths['/api/forms/analytics/users'] = {
   get: {
     tags: ['Forms Analytics'],

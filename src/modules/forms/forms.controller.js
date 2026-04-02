@@ -1,4 +1,4 @@
-import { Op, UniqueConstraintError } from 'sequelize';
+import { Op, QueryTypes, UniqueConstraintError } from 'sequelize';
 import sequelize from '../../config/sequelize.js';
 import User from '../users/user.model.js';
 import { toUserResponse } from '../users/userResponse.js';
@@ -198,6 +198,20 @@ function submissionHistoryWhere(userPk, fromDate, toDate) {
     where.submission_date = { [Op.lte]: toDate };
   }
   return where;
+}
+
+/** SQL `WHERE` fragment for `submissions` aliased as `s`, plus bound replacements (same semantics as list/history date filters). */
+function submissionDateSqlForAliasS(fromDate, toDate) {
+  if (fromDate && toDate) {
+    return { clause: 's.submission_date BETWEEN :fromDate AND :toDate', replacements: { fromDate, toDate } };
+  }
+  if (fromDate) {
+    return { clause: 's.submission_date >= :fromDate', replacements: { fromDate } };
+  }
+  if (toDate) {
+    return { clause: 's.submission_date <= :toDate', replacements: { toDate } };
+  }
+  return { clause: 'TRUE', replacements: {} };
 }
 
 function mapSubmissionsToHistory(rows) {
@@ -748,6 +762,200 @@ export async function listUsersSubmissionAnalytics(req, res) {
       adminUserId: req.auth?.userId,
     });
     return res.status(500).json({ success: false, message: 'Failed to fetch users analytics' });
+  }
+}
+
+export async function getSubmissionAnalyticsSummary(req, res) {
+  try {
+    const fromDate = parseDateOnly(req.query.from_date);
+    const toDate = parseDateOnly(req.query.to_date);
+    if ((req.query.from_date !== undefined && !fromDate) || (req.query.to_date !== undefined && !toDate)) {
+      return res.status(400).json({
+        success: false,
+        message: 'from_date and to_date must be in YYYY-MM-DD format',
+      });
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'from_date cannot be after to_date',
+      });
+    }
+
+    const { clause: dateClause, replacements } = submissionDateSqlForAliasS(fromDate, toDate);
+
+    const [
+      totalsRows,
+      byStaffDuty,
+      submissionsByDate,
+      byStaffDutyByDate,
+      byForm,
+      participationRows,
+    ] = await Promise.all([
+      sequelize.query(
+        `
+        SELECT
+          COUNT(s.id)::integer AS submission_count,
+          COUNT(DISTINCT s.user_id)::integer AS distinct_user_count,
+          MIN(s.submission_date)::text AS first_submission_date,
+          MAX(s.submission_date)::text AS last_submission_date
+        FROM submissions s
+        INNER JOIN forms f ON f.id = s.form_id
+        WHERE ${dateClause}
+        `,
+        { replacements, type: QueryTypes.SELECT }
+      ),
+      sequelize.query(
+        `
+        SELECT
+          f.staff_type AS staff_type,
+          f.duty_type AS duty_type,
+          COUNT(s.id)::integer AS submission_count,
+          COUNT(DISTINCT s.user_id)::integer AS distinct_user_count
+        FROM submissions s
+        INNER JOIN forms f ON f.id = s.form_id
+        WHERE ${dateClause}
+        GROUP BY f.staff_type, f.duty_type
+        ORDER BY f.staff_type ASC, f.duty_type ASC
+        `,
+        { replacements, type: QueryTypes.SELECT }
+      ),
+      sequelize.query(
+        `
+        SELECT
+          s.submission_date::text AS submission_date,
+          COUNT(s.id)::integer AS submission_count,
+          COUNT(DISTINCT s.user_id)::integer AS distinct_user_count
+        FROM submissions s
+        INNER JOIN forms f ON f.id = s.form_id
+        WHERE ${dateClause}
+        GROUP BY s.submission_date
+        ORDER BY s.submission_date ASC
+        `,
+        { replacements, type: QueryTypes.SELECT }
+      ),
+      sequelize.query(
+        `
+        SELECT
+          s.submission_date::text AS submission_date,
+          f.staff_type AS staff_type,
+          f.duty_type AS duty_type,
+          COUNT(s.id)::integer AS submission_count,
+          COUNT(DISTINCT s.user_id)::integer AS distinct_user_count
+        FROM submissions s
+        INNER JOIN forms f ON f.id = s.form_id
+        WHERE ${dateClause}
+        GROUP BY s.submission_date, f.staff_type, f.duty_type
+        ORDER BY s.submission_date ASC, f.staff_type ASC, f.duty_type ASC
+        `,
+        { replacements, type: QueryTypes.SELECT }
+      ),
+      sequelize.query(
+        `
+        SELECT
+          f.id::text AS form_id,
+          f.title AS title,
+          f.staff_type AS staff_type,
+          f.duty_type AS duty_type,
+          f.is_active AS is_active,
+          COUNT(s.id)::integer AS submission_count,
+          COUNT(DISTINCT s.user_id)::integer AS distinct_user_count
+        FROM submissions s
+        INNER JOIN forms f ON f.id = s.form_id
+        WHERE ${dateClause}
+        GROUP BY f.id, f.title, f.staff_type, f.duty_type, f.is_active
+        ORDER BY f.staff_type ASC, f.duty_type ASC, f.title ASC
+        `,
+        { replacements, type: QueryTypes.SELECT }
+      ),
+      sequelize.query(
+        `
+        SELECT
+          (
+            SELECT COUNT(*)::integer
+            FROM users u
+            WHERE u.role = 'USER' AND u.status = 'ACTIVE'
+          ) AS active_roster_user_count,
+          (
+            SELECT COUNT(DISTINCT s2.user_id)::integer
+            FROM submissions s2
+            INNER JOIN users u2 ON u2.id = s2.user_id
+            WHERE ${dateClause.replace(/s\./g, 's2.')}
+              AND u2.role = 'USER'
+              AND u2.status = 'ACTIVE'
+          ) AS active_users_with_submission_count
+        `,
+        { replacements, type: QueryTypes.SELECT }
+      ),
+    ]);
+
+    const totalsRow = totalsRows[0];
+    const participationRow = participationRows[0];
+
+    const totals = {
+      submission_count: totalsRow?.submission_count ?? 0,
+      distinct_user_count: totalsRow?.distinct_user_count ?? 0,
+    };
+
+    const roster = participationRow?.active_roster_user_count ?? 0;
+    const activeSubmitters = participationRow?.active_users_with_submission_count ?? 0;
+    const participation_rate =
+      roster > 0 ? Math.round((activeSubmitters / roster) * 10000) / 10000 : null;
+    const participation_percent =
+      roster > 0 ? Math.round((activeSubmitters / roster) * 10000) / 100 : null;
+
+    return res.json({
+      success: true,
+      filters: {
+        from_date: fromDate,
+        to_date: toDate,
+      },
+      meta: {
+        first_submission_date: totalsRow?.first_submission_date ?? null,
+        last_submission_date: totalsRow?.last_submission_date ?? null,
+        days_with_submissions: submissionsByDate.length,
+      },
+      totals,
+      by_staff_duty: byStaffDuty.map((row) => ({
+        staff_type: row.staff_type,
+        duty_type: row.duty_type,
+        submission_count: row.submission_count,
+        distinct_user_count: row.distinct_user_count,
+      })),
+      submissions_by_date: submissionsByDate.map((row) => ({
+        submission_date: row.submission_date,
+        submission_count: row.submission_count,
+        distinct_user_count: row.distinct_user_count,
+      })),
+      by_staff_duty_by_date: byStaffDutyByDate.map((row) => ({
+        submission_date: row.submission_date,
+        staff_type: row.staff_type,
+        duty_type: row.duty_type,
+        submission_count: row.submission_count,
+        distinct_user_count: row.distinct_user_count,
+      })),
+      by_form: byForm.map((row) => ({
+        form_id: row.form_id,
+        title: row.title,
+        staff_type: row.staff_type,
+        duty_type: row.duty_type,
+        is_active: row.is_active,
+        submission_count: row.submission_count,
+        distinct_user_count: row.distinct_user_count,
+      })),
+      participation: {
+        active_roster_user_count: roster,
+        active_users_with_submission_count: activeSubmitters,
+        participation_rate,
+        participation_percent,
+      },
+    });
+  } catch (err) {
+    logWarn('Forms', 'Submission analytics summary error', {
+      error: err.message,
+      adminUserId: req.auth?.userId,
+    });
+    return res.status(500).json({ success: false, message: 'Failed to fetch submission analytics summary' });
   }
 }
 

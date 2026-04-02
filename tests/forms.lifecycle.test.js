@@ -136,6 +136,11 @@ test('Forms auth and role guards', async () => {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   assert.strictEqual(userCannotViewAnalytics.status, 403);
+
+  const userCannotViewSummary = await rest('/api/forms/analytics/summary', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(userCannotViewSummary.status, 403);
 });
 
 test('Forms admin template lifecycle and template-scoped questions', async () => {
@@ -626,6 +631,95 @@ test('Forms analytics endpoints: filters, pagination, and validation errors', as
     headers: { Authorization: `Bearer ${adminToken}` },
   });
   assert.strictEqual(invalidHistoryDate.status, 400);
+});
+
+test('Forms analytics summary: aggregates, validation, and reconciliation', async () => {
+  const { adminToken, userToken } = await setupAdminAndUser();
+
+  const badFrom = await rest('/api/forms/analytics/summary?from_date=2026/01/01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badFrom.status, 400);
+
+  const badRange = await rest('/api/forms/analytics/summary?from_date=2026-12-31&to_date=2026-01-01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badRange.status, 400);
+
+  const allTime = await rest('/api/forms/analytics/summary', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(allTime.status, 200);
+  assert.strictEqual(allTime.data.success, true);
+  assert.ok(Number.isInteger(allTime.data.totals.submission_count));
+  assert.ok(Number.isInteger(allTime.data.totals.distinct_user_count));
+  assert.ok(Array.isArray(allTime.data.by_staff_duty));
+  assert.ok('meta' in allTime.data);
+  assert.ok(Number.isInteger(allTime.data.meta.days_with_submissions));
+  assert.ok(Array.isArray(allTime.data.submissions_by_date));
+  assert.ok(Array.isArray(allTime.data.by_staff_duty_by_date));
+  assert.ok(Array.isArray(allTime.data.by_form));
+  assert.ok(allTime.data.participation);
+  assert.ok(Number.isInteger(allTime.data.participation.active_roster_user_count));
+  assert.ok(Number.isInteger(allTime.data.participation.active_users_with_submission_count));
+  const sumAllTime = allTime.data.by_staff_duty.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumAllTime, allTime.data.totals.submission_count);
+  const sumByDay = allTime.data.submissions_by_date.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumByDay, allTime.data.totals.submission_count);
+  const sumByForm = allTime.data.by_form.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumByForm, allTime.data.totals.submission_count);
+  const sumSeries = allTime.data.by_staff_duty_by_date.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumSeries, allTime.data.totals.submission_count);
+
+  const createRequired = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
+    prompt: `Summary rollup ${Date.now()}`,
+    is_required: true,
+    sort_order: 0,
+  });
+  assert.strictEqual(createRequired.status, 201);
+  const requiredQuestionId = createRequired.data.question.id;
+
+  const allQuestionIds = await getTodayQuestionIds(userToken);
+  const submitToday = await rest('/api/forms/submissions/today', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({
+      staffType: DEFAULT_STAFF_TYPE,
+      dutyType: DEFAULT_DUTY_TYPE,
+      answers: allQuestionIds.map((qid) => ({
+        question_id: qid,
+        answer_text: qid === requiredQuestionId ? 'Summary endpoint test' : 'Other',
+      })),
+    }),
+  });
+  assert.strictEqual(submitToday.status, 201, JSON.stringify(submitToday.data));
+
+  const today = new Date().toISOString().slice(0, 10);
+  const windowed = await rest(
+    `/api/forms/analytics/summary?from_date=${encodeURIComponent(today)}&to_date=${encodeURIComponent(today)}`,
+    { headers: { Authorization: `Bearer ${adminToken}` } },
+  );
+  assert.strictEqual(windowed.status, 200);
+  assert.strictEqual(windowed.data.filters.from_date, today);
+  assert.strictEqual(windowed.data.filters.to_date, today);
+  const sumWindow = windowed.data.by_staff_duty.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumWindow, windowed.data.totals.submission_count);
+  assert.ok(windowed.data.totals.submission_count >= 1);
+
+  const entry = windowed.data.by_staff_duty.find(
+    (r) => r.staff_type === DEFAULT_STAFF_TYPE && r.duty_type === DEFAULT_DUTY_TYPE,
+  );
+  assert.ok(entry, 'Expected a breakdown row for default staff+duty after submit');
+  assert.ok(entry.submission_count >= 1);
+  assert.ok(entry.distinct_user_count >= 1);
+
+  const todayRow = windowed.data.submissions_by_date.find((r) => r.submission_date === today);
+  assert.ok(todayRow);
+  assert.ok(todayRow.submission_count >= 1);
+  const formRow = windowed.data.by_form.find((r) => r.staff_type === DEFAULT_STAFF_TYPE && r.duty_type === DEFAULT_DUTY_TYPE);
+  assert.ok(formRow);
+  assert.ok(formRow.form_id);
+  assert.ok(typeof formRow.is_active === 'boolean');
 });
 
 test('GET /api/forms/submissions/me: scoped history, pagination, role guards', async () => {
