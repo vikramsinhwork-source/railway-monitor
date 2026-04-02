@@ -11,7 +11,7 @@ function isValidUuid(value) {
 }
 
 const STAFF_TYPES = ['ALP', 'LP', 'TM'];
-const DUTY_TYPES = ['SIGN_IN', 'SIGN_OFF'];
+const DUTY_TYPES = ['SIGN_ON', 'SIGN_OFF'];
 
 function normalizeEnumValue(value) {
   if (typeof value !== 'string') return null;

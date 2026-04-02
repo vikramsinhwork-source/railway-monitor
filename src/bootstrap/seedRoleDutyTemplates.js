@@ -3,10 +3,10 @@ import Question from '../modules/forms/question.model.js';
 import { logInfo, logWarn } from '../utils/logger.js';
 
 const STAFF_TYPES = ['ALP', 'LP', 'TM'];
-const DUTY_TYPES = ['SIGN_IN', 'SIGN_OFF'];
+const DUTY_TYPES = ['SIGN_ON', 'SIGN_OFF'];
 
 function starterTitle(staffType, dutyType) {
-  return `${staffType} ${dutyType.replace('_', ' ').toLowerCase()} starter template`;
+  return `${staffType} ${dutyType.replace(/_/g, ' ')} starter template`;
 }
 
 async function cloneQuestions(sourceFormId, targetFormId) {

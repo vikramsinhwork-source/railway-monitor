@@ -185,7 +185,7 @@ const options = {
             title: { type: 'string' },
             description: { type: 'string', nullable: true },
             staff_type: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-            duty_type: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+            duty_type: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
             is_active: { type: 'boolean' },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
@@ -198,7 +198,7 @@ const options = {
             title: { type: 'string' },
             description: { type: 'string', nullable: true },
             staffType: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-            dutyType: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+            dutyType: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
           },
         },
         TodayAnswerItem: {
@@ -214,7 +214,7 @@ const options = {
           required: ['staffType', 'dutyType', 'answers'],
           properties: {
             staffType: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-            dutyType: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+            dutyType: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
             answers: {
               type: 'array',
               items: { $ref: '#/components/schemas/TodayAnswerItem' },
@@ -232,7 +232,7 @@ const options = {
                 title: { type: 'string' },
                 description: { type: 'string', nullable: true },
                 staff_type: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-                duty_type: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+                duty_type: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
               },
             },
             questions: {
@@ -749,7 +749,7 @@ spec.paths['/api/forms/templates'] = {
     security: [{ bearerAuth: [] }],
     parameters: [
       { name: 'staffType', in: 'query', schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] } },
-      { name: 'dutyType', in: 'query', schema: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] } },
+      { name: 'dutyType', in: 'query', schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] } },
       { name: 'isActive', in: 'query', schema: { type: 'boolean' } },
     ],
     responses: {
@@ -862,7 +862,7 @@ spec.paths['/api/forms/today'] = {
     security: [{ bearerAuth: [] }],
     parameters: [
       { name: 'staffType', in: 'query', required: true, schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] } },
-      { name: 'dutyType', in: 'query', required: true, schema: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] } },
+      { name: 'dutyType', in: 'query', required: true, schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] } },
     ],
     responses: {
       200: {
