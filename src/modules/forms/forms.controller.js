@@ -1,4 +1,5 @@
 import { Op, QueryTypes, UniqueConstraintError } from 'sequelize';
+import ExcelJS from 'exceljs';
 import sequelize from '../../config/sequelize.js';
 import User from '../users/user.model.js';
 import { toUserResponse } from '../users/userResponse.js';
@@ -144,7 +145,11 @@ async function getOrCreateActiveForm() {
 }
 
 function getTodayDateOnly() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function parsePositiveInt(value, fallback) {
@@ -161,7 +166,8 @@ function parseDateOnly(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return null;
-  const parsed = new Date(`${trimmed}T00:00:00.000Z`);
+  const [y, mo, da] = trimmed.split('-').map((n) => Number.parseInt(n, 10));
+  const parsed = new Date(y, mo - 1, da);
   if (Number.isNaN(parsed.getTime())) return null;
   return trimmed;
 }
@@ -212,6 +218,63 @@ function submissionDateSqlForAliasS(fromDate, toDate) {
     return { clause: 's.submission_date <= :toDate', replacements: { toDate } };
   }
   return { clause: 'TRUE', replacements: {} };
+}
+
+/**
+ * Shared analytics export filters; mirrors listUsersSubmissionAnalytics / getSubmissionAnalyticsSummary
+ * plus optional staffType + dutyType pair (both required when either is present).
+ * @returns {{ error: { status: number, message: string } } | { fromDate: string|null, toDate: string|null, search: string, userStatus: string, formContext: { staffType: string, dutyType: string }|null }}
+ */
+function parseAnalyticsExportQuery(query) {
+  const fromDate = parseDateOnly(query.from_date);
+  const toDate = parseDateOnly(query.to_date);
+  if (
+    (query.from_date !== undefined && query.from_date !== null && query.from_date !== '' && !fromDate) ||
+    (query.to_date !== undefined && query.to_date !== null && query.to_date !== '' && !toDate)
+  ) {
+    return { error: { status: 400, message: 'from_date and to_date must be in YYYY-MM-DD format' } };
+  }
+  if (fromDate && toDate && fromDate > toDate) {
+    return { error: { status: 400, message: 'from_date cannot be after to_date' } };
+  }
+
+  const search = (query.search || query.q || '').toString().trim();
+  const userStatus = (query.status || '').toString().trim().toUpperCase();
+  if (userStatus && !['ACTIVE', 'INACTIVE'].includes(userStatus)) {
+    return { error: { status: 400, message: 'status must be ACTIVE or INACTIVE' } };
+  }
+
+  let formContext = null;
+  if (query.staffType !== undefined || query.dutyType !== undefined) {
+    const parsed = parseFormContext(query, { source: 'query' });
+    if (parsed.error) {
+      return { error: { status: 400, message: parsed.error } };
+    }
+    formContext = parsed.context;
+  }
+
+  return { fromDate, toDate, search, userStatus, formContext };
+}
+
+function getFormsExportMaxRows() {
+  const raw = process.env.FORMS_EXPORT_MAX_ROWS;
+  if (raw === undefined || raw === '') return 50000;
+  const n = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(n)) return 50000;
+  if (n <= 0) return null;
+  return n;
+}
+
+function sanitizeExportFilenamePart(value) {
+  return String(value).replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'all';
+}
+
+function buildExportFilename(fromDate, toDate) {
+  let range = 'all';
+  if (fromDate && toDate) range = `${fromDate}_to_${toDate}`;
+  else if (fromDate) range = `from_${fromDate}`;
+  else if (toDate) range = `to_${toDate}`;
+  return `form-submissions-${sanitizeExportFilenamePart(range)}.xlsx`;
 }
 
 function mapSubmissionsToHistory(rows) {
@@ -956,6 +1019,221 @@ export async function getSubmissionAnalyticsSummary(req, res) {
       adminUserId: req.auth?.userId,
     });
     return res.status(500).json({ success: false, message: 'Failed to fetch submission analytics summary' });
+  }
+}
+
+const USERS_EXPORT_COLUMNS = [
+  { header: 'id', key: 'id' },
+  { header: 'user_id', key: 'user_id' },
+  { header: 'name', key: 'name' },
+  { header: 'email', key: 'email' },
+  { header: 'status', key: 'status' },
+  { header: 'crew_type', key: 'crew_type' },
+  { header: 'head_quarter', key: 'head_quarter' },
+  { header: 'mobile', key: 'mobile' },
+  { header: 'user_created_at', key: 'user_created_at' },
+  { header: 'submission_count_in_range', key: 'submission_count_in_range' },
+  { header: 'first_submission_date_in_range', key: 'first_submission_date_in_range' },
+  { header: 'last_submission_date_in_range', key: 'last_submission_date_in_range' },
+];
+
+const FILLS_EXPORT_COLUMNS = [
+  ...USERS_EXPORT_COLUMNS.filter((c) => c.key !== 'submission_count_in_range' && c.key !== 'first_submission_date_in_range' && c.key !== 'last_submission_date_in_range'),
+  { header: 'submission_date', key: 'submission_date' },
+  { header: 'submission_created_at', key: 'submission_created_at' },
+  { header: 'form_title', key: 'form_title' },
+  { header: 'staff_type', key: 'staff_type' },
+  { header: 'duty_type', key: 'duty_type' },
+  { header: 'question_sort_order', key: 'question_sort_order' },
+  { header: 'question_prompt', key: 'question_prompt' },
+  { header: 'answer_text', key: 'answer_text' },
+  { header: 'answer_created_at', key: 'answer_created_at' },
+];
+
+function formatCellDate(value) {
+  if (value == null) return '';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return value === '' ? '' : String(value);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+export async function exportSubmissionAnalyticsXlsx(req, res) {
+  try {
+    const parsed = parseAnalyticsExportQuery(req.query);
+    if (parsed.error) {
+      return res.status(parsed.error.status).json({ success: false, message: parsed.error.message });
+    }
+    const { fromDate, toDate, search, userStatus, formContext } = parsed;
+
+    const { clause: dateClause, replacements: dateReplacements } = submissionDateSqlForAliasS(fromDate, toDate);
+    const formStaffDutyClause = formContext
+      ? 'AND f.staff_type = :staffType AND f.duty_type = :dutyType'
+      : '';
+    const formReplacements = formContext
+      ? { staffType: formContext.staffType, dutyType: formContext.dutyType }
+      : {};
+
+    let userSearchClause = '';
+    const userSearchReplacements = {};
+    if (search) {
+      userSearchClause =
+        'AND (u.user_id ILIKE :searchLike OR u.name ILIKE :searchLike OR u.email ILIKE :searchLike)';
+      userSearchReplacements.searchLike = `%${search}%`;
+    }
+
+    let userStatusClause = '';
+    const userStatusReplacements = {};
+    if (userStatus) {
+      userStatusClause = 'AND u.status = :userStatus';
+      userStatusReplacements.userStatus = userStatus;
+    }
+
+    const baseReplacements = {
+      ...dateReplacements,
+      ...formReplacements,
+      ...userSearchReplacements,
+      ...userStatusReplacements,
+    };
+
+    const usersSql = `
+      SELECT
+        u.id::text AS id,
+        u.user_id,
+        u.name,
+        u.email,
+        u.status,
+        u.crew_type,
+        u.head_quarter,
+        u.mobile,
+        u.created_at AS user_created_at,
+        COALESCE(agg.cnt, 0)::integer AS submission_count_in_range,
+        agg.first_dt::text AS first_submission_date_in_range,
+        agg.last_dt::text AS last_submission_date_in_range
+      FROM users u
+      LEFT JOIN (
+        SELECT s.user_id,
+          COUNT(s.id)::integer AS cnt,
+          MIN(s.submission_date) AS first_dt,
+          MAX(s.submission_date) AS last_dt
+        FROM submissions s
+        INNER JOIN forms f ON f.id = s.form_id
+        WHERE ${dateClause}
+        ${formStaffDutyClause}
+        GROUP BY s.user_id
+      ) agg ON agg.user_id = u.id
+      WHERE u.role = 'USER'
+      ${userSearchClause}
+      ${userStatusClause}
+      ORDER BY u.user_id ASC
+    `;
+
+    const fillsCountSql = `
+      SELECT COUNT(*)::integer AS fill_row_count
+      FROM submissions s
+      INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
+      INNER JOIN forms f ON f.id = s.form_id
+      LEFT JOIN answers a ON a.submission_id = s.id
+      LEFT JOIN questions q ON q.id = a.question_id
+      WHERE ${dateClause}
+      ${formStaffDutyClause}
+      ${userSearchClause}
+      ${userStatusClause}
+    `;
+
+    const fillsSql = `
+      SELECT
+        u.id::text AS id,
+        u.user_id,
+        u.name,
+        u.email,
+        u.status,
+        u.crew_type,
+        u.head_quarter,
+        u.mobile,
+        s.submission_date::text AS submission_date,
+        f.title AS form_title,
+        f.staff_type,
+        f.duty_type,
+        q.prompt AS question_prompt,
+        a.answer_text,
+        a.created_at AS answer_created_at
+      FROM submissions s
+      INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
+      INNER JOIN forms f ON f.id = s.form_id
+      LEFT JOIN answers a ON a.submission_id = s.id
+      LEFT JOIN questions q ON q.id = a.question_id
+      WHERE ${dateClause}
+      ${formStaffDutyClause}
+      ${userSearchClause}
+      ${userStatusClause}
+      ORDER BY u.user_id ASC, s.submission_date DESC, s.created_at DESC, q.sort_order ASC NULLS LAST
+    `;
+
+    const maxRows = getFormsExportMaxRows();
+    if (maxRows != null) {
+      const [countRow] = await sequelize.query(fillsCountSql, {
+        replacements: baseReplacements,
+        type: QueryTypes.SELECT,
+      });
+      const fillRowCount = countRow?.fill_row_count ?? 0;
+      if (fillRowCount > maxRows) {
+        return res.status(400).json({
+          success: false,
+          message: `Export would exceed ${maxRows} rows (${fillRowCount}). Narrow the date range or filters and try again.`,
+        });
+      }
+    }
+
+    const [userRows, fillRows] = await Promise.all([
+      sequelize.query(usersSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
+      sequelize.query(fillsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
+    ]);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Forms analytics';
+
+    const usersSheet = workbook.addWorksheet('Users', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    usersSheet.columns = USERS_EXPORT_COLUMNS.map((c) => ({ ...c, width: 18 }));
+    usersSheet.getRow(1).font = { bold: true };
+    for (const row of userRows) {
+      usersSheet.addRow({
+        ...row,
+        user_created_at: formatCellDate(row.user_created_at),
+      });
+    }
+
+    const fillsSheet = workbook.addWorksheet('Fills', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    fillsSheet.columns = FILLS_EXPORT_COLUMNS.map((c) => ({ ...c, width: 18 }));
+    fillsSheet.getRow(1).font = { bold: true };
+    for (const row of fillRows) {
+      fillsSheet.addRow({
+        ...row,
+        user_created_at: formatCellDate(row.user_created_at),
+        submission_created_at: formatCellDate(row.submission_created_at),
+        answer_created_at: formatCellDate(row.answer_created_at),
+      });
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const filename = buildExportFilename(fromDate, toDate);
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    logWarn('Forms', 'Export submission analytics XLSX error', {
+      error: err.message,
+      adminUserId: req.auth?.userId,
+    });
+    return res.status(500).json({ success: false, message: 'Failed to export submission analytics' });
   }
 }
 

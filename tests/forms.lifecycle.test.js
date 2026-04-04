@@ -19,6 +19,20 @@ async function rest(path, options = {}) {
   return { status: res.status, data };
 }
 
+/** For endpoints that return binary (e.g. XLSX); does not JSON-parse the body. */
+async function restBinary(path, options = {}) {
+  const url = `${BASE_URL}${path}`;
+  const { headers: optHeaders, ...fetchOpts } = options;
+  const headers = { ...(optHeaders || {}) };
+  if (fetchOpts.body != null && headers['Content-Type'] === undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(url, { ...fetchOpts, headers });
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const contentType = res.headers.get('content-type') || '';
+  return { status: res.status, buffer, contentType };
+}
+
 async function login(userId, password) {
   const { status, data } = await rest('/api/auth/login', {
     method: 'POST',
@@ -141,6 +155,11 @@ test('Forms auth and role guards', async () => {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   assert.strictEqual(userCannotViewSummary.status, 403);
+
+  const userCannotExportAnalytics = await rest('/api/forms/analytics/export', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(userCannotExportAnalytics.status, 403);
 });
 
 test('Forms admin template lifecycle and template-scoped questions', async () => {
@@ -694,7 +713,8 @@ test('Forms analytics summary: aggregates, validation, and reconciliation', asyn
   });
   assert.strictEqual(submitToday.status, 201, JSON.stringify(submitToday.data));
 
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   const windowed = await rest(
     `/api/forms/analytics/summary?from_date=${encodeURIComponent(today)}&to_date=${encodeURIComponent(today)}`,
     { headers: { Authorization: `Bearer ${adminToken}` } },
@@ -720,6 +740,45 @@ test('Forms analytics summary: aggregates, validation, and reconciliation', asyn
   assert.ok(formRow);
   assert.ok(formRow.form_id);
   assert.ok(typeof formRow.is_active === 'boolean');
+});
+
+test('Forms analytics export XLSX: admin download, Content-Type, magic bytes, and filter validation parity', async () => {
+  const { adminToken } = await setupAdminAndUser();
+
+  const adminExport = await restBinary('/api/forms/analytics/export', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(adminExport.status, 200);
+  assert.ok(
+    adminExport.contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    `unexpected Content-Type: ${adminExport.contentType}`,
+  );
+  assert.strictEqual(adminExport.buffer[0], 0x50);
+  assert.strictEqual(adminExport.buffer[1], 0x4b);
+
+  const badFromDate = await rest('/api/forms/analytics/export?from_date=2026/01/01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badFromDate.status, 400);
+  assert.strictEqual(badFromDate.data.message, 'from_date and to_date must be in YYYY-MM-DD format');
+
+  const badDateRange = await rest('/api/forms/analytics/export?from_date=2026-12-31&to_date=2026-01-01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badDateRange.status, 400);
+  assert.strictEqual(badDateRange.data.message, 'from_date cannot be after to_date');
+
+  const badStatus = await rest('/api/forms/analytics/export?status=BAD', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badStatus.status, 400);
+  assert.strictEqual(badStatus.data.message, 'status must be ACTIVE or INACTIVE');
+
+  const staffOnly = await rest('/api/forms/analytics/export?staffType=ALP', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(staffOnly.status, 400);
+  assert.match(staffOnly.data.message, /dutyType is required/);
 });
 
 test('GET /api/forms/submissions/me: scoped history, pagination, role guards', async () => {

@@ -18,6 +18,7 @@ router.get('/questions/:id', requireAuth, requireAdmin, formsController.getQuest
 router.patch('/questions/:id', requireAuth, requireAdmin, formsController.updateQuestion);
 router.delete('/questions/:id', requireAuth, requireAdmin, formsController.deleteQuestion);
 router.get('/analytics/summary', requireAuth, requireAdmin, formsController.getSubmissionAnalyticsSummary);
+router.get('/analytics/export', requireAuth, requireAdmin, formsController.exportSubmissionAnalyticsXlsx);
 router.get('/analytics/users', requireAuth, requireAdmin, formsController.listUsersSubmissionAnalytics);
 router.get('/analytics/users/:userId/history', requireAuth, requireAdmin, formsController.getUserSubmissionHistory);
 router.get('/today', requireAuth, requireUser, formsController.getTodayQuestions);

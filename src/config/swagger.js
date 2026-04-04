@@ -979,6 +979,53 @@ spec.paths['/api/forms/analytics/summary'] = {
     },
   },
 };
+spec.paths['/api/forms/analytics/export'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Export form analytics as XLSX (Admin only)',
+    description:
+      'Downloads an Excel workbook with two worksheets: **Users** (one row per USER roster member matching filters, with in-range submission counts and first/last dates) and **Fills** (one row per answer, with user columns repeated; submissions without answers still produce one row). Query filters match `GET /api/forms/analytics/users` and date semantics match `GET /api/forms/analytics/summary` (no `page` or `limit`). Returns `Content-Disposition: attachment` with a filename derived from the date range. If `FORMS_EXPORT_MAX_ROWS` is set and the Fills row count would exceed it, responds with 400 JSON.',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+      { name: 'q', in: 'query', schema: { type: 'string' } },
+      { name: 'status', in: 'query', schema: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] } },
+      {
+        name: 'staffType',
+        in: 'query',
+        schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+      {
+        name: 'dutyType',
+        in: 'query',
+        schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+    ],
+    responses: {
+      200: {
+        description: 'XLSX binary (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`)',
+        content: {
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+            schema: { type: 'string', format: 'binary' },
+          },
+        },
+        headers: {
+          'Content-Disposition': {
+            schema: { type: 'string' },
+            description: 'attachment; filename derived from date range (e.g. form-submissions-all.xlsx)',
+          },
+        },
+      },
+      400: { description: 'Validation error or export row cap exceeded', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
 spec.paths['/api/forms/analytics/users'] = {
   get: {
     tags: ['Forms Analytics'],
