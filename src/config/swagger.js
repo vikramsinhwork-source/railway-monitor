@@ -984,7 +984,7 @@ spec.paths['/api/forms/analytics/export'] = {
     tags: ['Forms Analytics'],
     summary: 'Export form analytics as XLSX (Admin only)',
     description:
-      'Downloads an Excel workbook with two worksheets: **Users** (one row per USER roster member matching filters, with in-range submission counts and first/last dates) and **Fills** (one row per answer, with user columns repeated; submissions without answers still produce one row). Query filters match `GET /api/forms/analytics/users` and date semantics match `GET /api/forms/analytics/summary` (no `page` or `limit`). Returns `Content-Disposition: attachment` with a filename derived from the date range. If `FORMS_EXPORT_MAX_ROWS` is set and the Fills row count would exceed it, responds with 400 JSON.',
+      'Downloads an Excel workbook with worksheets: **Export info** (generation timestamp, document title, and applied filters), **Users** (one row per USER roster member matching filters, with in-range submission counts and first/last dates), and **Fills** (one row per answer, with user columns repeated; submissions without answers still produce one row). Workbook metadata (title, author, last modified) is set for Excel file properties. Query filters match `GET /api/forms/analytics/users` and date semantics match `GET /api/forms/analytics/summary` (no `page` or `limit`). Returns `Content-Disposition: attachment` with a filename that includes the date range and an export timestamp. If `FORMS_EXPORT_MAX_ROWS` is set and the Fills row count would exceed it, responds with 400 JSON.',
     security: [{ bearerAuth: [] }],
     parameters: [
       { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
@@ -1016,7 +1016,8 @@ spec.paths['/api/forms/analytics/export'] = {
         headers: {
           'Content-Disposition': {
             schema: { type: 'string' },
-            description: 'attachment; filename derived from date range (e.g. form-submissions-all.xlsx)',
+            description:
+              'attachment; filename includes date range and export time (e.g. form-submissions-all-2026-04-04-143052.xlsx)',
           },
         },
       },

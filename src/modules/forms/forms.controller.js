@@ -269,12 +269,21 @@ function sanitizeExportFilenamePart(value) {
   return String(value).replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'all';
 }
 
-function buildExportFilename(fromDate, toDate) {
+function formatExportFilenameTimestamp(d) {
+  const pad = (n) => String(n).padStart(2, '0');
+  const x = d instanceof Date ? d : new Date(d);
+  return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}-${pad(x.getHours())}${pad(x.getMinutes())}${pad(x.getSeconds())}`;
+}
+
+const EXPORT_WORKBOOK_TITLE = 'Form submissions analytics export';
+
+function buildExportFilename(fromDate, toDate, exportedAt) {
   let range = 'all';
   if (fromDate && toDate) range = `${fromDate}_to_${toDate}`;
   else if (fromDate) range = `from_${fromDate}`;
   else if (toDate) range = `to_${toDate}`;
-  return `form-submissions-${sanitizeExportFilenamePart(range)}.xlsx`;
+  const ts = formatExportFilenameTimestamp(exportedAt);
+  return `form-submissions-${sanitizeExportFilenamePart(range)}-${sanitizeExportFilenamePart(ts)}.xlsx`;
 }
 
 function mapSubmissionsToHistory(rows) {
@@ -1044,7 +1053,6 @@ const FILLS_EXPORT_COLUMNS = [
   { header: 'form_title', key: 'form_title' },
   { header: 'staff_type', key: 'staff_type' },
   { header: 'duty_type', key: 'duty_type' },
-  { header: 'question_sort_order', key: 'question_sort_order' },
   { header: 'question_prompt', key: 'question_prompt' },
   { header: 'answer_text', key: 'answer_text' },
   { header: 'answer_created_at', key: 'answer_created_at' },
@@ -1152,6 +1160,7 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
         u.head_quarter,
         u.mobile,
         s.submission_date::text AS submission_date,
+        s.created_at AS submission_created_at,
         f.title AS form_title,
         f.staff_type,
         f.duty_type,
@@ -1190,8 +1199,36 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
       sequelize.query(fillsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
     ]);
 
+    const exportedAt = new Date();
+
     const workbook = new ExcelJS.Workbook();
-    workbook.creator = 'Forms analytics';
+    workbook.creator = 'Kiosk Monitor - Forms analytics';
+    workbook.lastModifiedBy = 'Kiosk Monitor - Forms analytics';
+    workbook.title = EXPORT_WORKBOOK_TITLE;
+    workbook.subject = 'Roster users and per-answer submission export';
+    workbook.created = exportedAt;
+    workbook.modified = exportedAt;
+
+    const exportInfoSheet = workbook.addWorksheet('Export info', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    exportInfoSheet.columns = [
+      { header: 'field', key: 'field', width: 30 },
+      { header: 'value', key: 'value', width: 56 },
+    ];
+    exportInfoSheet.getRow(1).font = { bold: true };
+    for (const row of [
+      { field: 'export_generated_at', value: formatCellDate(exportedAt) },
+      { field: 'workbook_title', value: EXPORT_WORKBOOK_TITLE },
+      { field: 'filter_from_date', value: fromDate || '' },
+      { field: 'filter_to_date', value: toDate || '' },
+      { field: 'filter_search', value: search || '' },
+      { field: 'filter_status', value: userStatus || '' },
+      { field: 'filter_staff_type', value: formContext?.staffType || '' },
+      { field: 'filter_duty_type', value: formContext?.dutyType || '' },
+    ]) {
+      exportInfoSheet.addRow(row);
+    }
 
     const usersSheet = workbook.addWorksheet('Users', {
       views: [{ state: 'frozen', ySplit: 1 }],
@@ -1220,7 +1257,7 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
     }
 
     const buffer = await workbook.xlsx.writeBuffer();
-    const filename = buildExportFilename(fromDate, toDate);
+    const filename = buildExportFilename(fromDate, toDate, exportedAt);
 
     res.setHeader(
       'Content-Type',
