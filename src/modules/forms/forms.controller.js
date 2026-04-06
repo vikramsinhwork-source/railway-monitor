@@ -1031,32 +1031,29 @@ export async function getSubmissionAnalyticsSummary(req, res) {
   }
 }
 
-const USERS_EXPORT_COLUMNS = [
-  { header: 'id', key: 'id' },
-  { header: 'user_id', key: 'user_id' },
-  { header: 'name', key: 'name' },
-  { header: 'email', key: 'email' },
-  { header: 'status', key: 'status' },
-  { header: 'crew_type', key: 'crew_type' },
-  { header: 'head_quarter', key: 'head_quarter' },
-  { header: 'mobile', key: 'mobile' },
-  { header: 'user_created_at', key: 'user_created_at' },
-  { header: 'submission_count_in_range', key: 'submission_count_in_range' },
-  { header: 'first_submission_date_in_range', key: 'first_submission_date_in_range' },
-  { header: 'last_submission_date_in_range', key: 'last_submission_date_in_range' },
-];
+function makeStaffDutyKey(staffType, dutyType) {
+  return `${staffType}__${dutyType}`;
+}
 
-const FILLS_EXPORT_COLUMNS = [
-  ...USERS_EXPORT_COLUMNS.filter((c) => c.key !== 'submission_count_in_range' && c.key !== 'first_submission_date_in_range' && c.key !== 'last_submission_date_in_range'),
-  { header: 'submission_date', key: 'submission_date' },
-  { header: 'submission_created_at', key: 'submission_created_at' },
-  { header: 'form_title', key: 'form_title' },
-  { header: 'staff_type', key: 'staff_type' },
-  { header: 'duty_type', key: 'duty_type' },
-  { header: 'question_prompt', key: 'question_prompt' },
-  { header: 'answer_text', key: 'answer_text' },
-  { header: 'answer_created_at', key: 'answer_created_at' },
-];
+function buildStaffDutyExportConfigs(formContext) {
+  const dutyDisplay = {
+    SIGN_ON: 'SIGN ON',
+    SIGN_OFF: 'SIGN OFF',
+  };
+  const configs = [];
+  for (const dutyType of DUTY_TYPES) {
+    for (const staffType of STAFF_TYPES) {
+      if (formContext && (formContext.staffType !== staffType || formContext.dutyType !== dutyType)) continue;
+      configs.push({
+        staffType,
+        dutyType,
+        key: makeStaffDutyKey(staffType, dutyType),
+        sheetName: `${dutyDisplay[dutyType] || dutyType} ${staffType}`,
+      });
+    }
+  }
+  return configs;
+}
 
 function formatCellDate(value) {
   if (value == null) return '';
@@ -1104,8 +1101,20 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
       ...userStatusReplacements,
     };
 
-    const usersSql = `
+    const fillsCountSql = `
+      SELECT COUNT(DISTINCT s.id)::integer AS submission_row_count
+      FROM submissions s
+      INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
+      INNER JOIN forms f ON f.id = s.form_id
+      WHERE ${dateClause}
+      ${formStaffDutyClause}
+      ${userSearchClause}
+      ${userStatusClause}
+    `;
+
+    const fillsSql = `
       SELECT
+        s.id::text AS submission_id,
         u.id::text AS id,
         u.user_id,
         u.name,
@@ -1115,55 +1124,12 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
         u.head_quarter,
         u.mobile,
         u.created_at AS user_created_at,
-        COALESCE(agg.cnt, 0)::integer AS submission_count_in_range,
-        agg.first_dt::text AS first_submission_date_in_range,
-        agg.last_dt::text AS last_submission_date_in_range
-      FROM users u
-      LEFT JOIN (
-        SELECT s.user_id,
-          COUNT(s.id)::integer AS cnt,
-          MIN(s.submission_date) AS first_dt,
-          MAX(s.submission_date) AS last_dt
-        FROM submissions s
-        INNER JOIN forms f ON f.id = s.form_id
-        WHERE ${dateClause}
-        ${formStaffDutyClause}
-        GROUP BY s.user_id
-      ) agg ON agg.user_id = u.id
-      WHERE u.role = 'USER'
-      ${userSearchClause}
-      ${userStatusClause}
-      ORDER BY u.user_id ASC
-    `;
-
-    const fillsCountSql = `
-      SELECT COUNT(*)::integer AS fill_row_count
-      FROM submissions s
-      INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
-      INNER JOIN forms f ON f.id = s.form_id
-      LEFT JOIN answers a ON a.submission_id = s.id
-      LEFT JOIN questions q ON q.id = a.question_id
-      WHERE ${dateClause}
-      ${formStaffDutyClause}
-      ${userSearchClause}
-      ${userStatusClause}
-    `;
-
-    const fillsSql = `
-      SELECT
-        u.id::text AS id,
-        u.user_id,
-        u.name,
-        u.email,
-        u.status,
-        u.crew_type,
-        u.head_quarter,
-        u.mobile,
         s.submission_date::text AS submission_date,
         s.created_at AS submission_created_at,
         f.title AS form_title,
         f.staff_type,
         f.duty_type,
+        q.sort_order AS question_sort_order,
         q.prompt AS question_prompt,
         a.answer_text,
         a.created_at AS answer_created_at
@@ -1179,24 +1145,37 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
       ORDER BY u.user_id ASC, s.submission_date DESC, s.created_at DESC, q.sort_order ASC NULLS LAST
     `;
 
+    const templateQuestionsSql = `
+      SELECT
+        f.staff_type,
+        f.duty_type,
+        q.prompt,
+        q.sort_order
+      FROM forms f
+      INNER JOIN questions q ON q.form_id = f.id
+      WHERE f.is_active = TRUE
+      ${formStaffDutyClause}
+      ORDER BY f.staff_type ASC, f.duty_type ASC, q.sort_order ASC, q.created_at ASC
+    `;
+
     const maxRows = getFormsExportMaxRows();
     if (maxRows != null) {
       const [countRow] = await sequelize.query(fillsCountSql, {
         replacements: baseReplacements,
         type: QueryTypes.SELECT,
       });
-      const fillRowCount = countRow?.fill_row_count ?? 0;
-      if (fillRowCount > maxRows) {
+      const submissionRowCount = countRow?.submission_row_count ?? 0;
+      if (submissionRowCount > maxRows) {
         return res.status(400).json({
           success: false,
-          message: `Export would exceed ${maxRows} rows (${fillRowCount}). Narrow the date range or filters and try again.`,
+          message: `Export would exceed ${maxRows} rows (${submissionRowCount}). Narrow the date range or filters and try again.`,
         });
       }
     }
 
-    const [userRows, fillRows] = await Promise.all([
-      sequelize.query(usersSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
+    const [fillRows, templateQuestionRows] = await Promise.all([
       sequelize.query(fillsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
+      sequelize.query(templateQuestionsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
     ]);
 
     const exportedAt = new Date();
@@ -1230,29 +1209,89 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
       exportInfoSheet.addRow(row);
     }
 
-    const usersSheet = workbook.addWorksheet('Users', {
-      views: [{ state: 'frozen', ySplit: 1 }],
-    });
-    usersSheet.columns = USERS_EXPORT_COLUMNS.map((c) => ({ ...c, width: 18 }));
-    usersSheet.getRow(1).font = { bold: true };
-    for (const row of userRows) {
-      usersSheet.addRow({
-        ...row,
-        user_created_at: formatCellDate(row.user_created_at),
+    const staffDutyConfigs = buildStaffDutyExportConfigs(formContext);
+    const questionsByStaffDuty = new Map();
+    for (const row of templateQuestionRows) {
+      const key = makeStaffDutyKey(row.staff_type, row.duty_type);
+      if (!questionsByStaffDuty.has(key)) {
+        questionsByStaffDuty.set(key, []);
+      }
+      questionsByStaffDuty.get(key).push({
+        prompt: row.prompt,
+        sort_order: row.sort_order,
       });
     }
 
-    const fillsSheet = workbook.addWorksheet('Fills', {
-      views: [{ state: 'frozen', ySplit: 1 }],
-    });
-    fillsSheet.columns = FILLS_EXPORT_COLUMNS.map((c) => ({ ...c, width: 18 }));
-    fillsSheet.getRow(1).font = { bold: true };
+    const groupedSubmissions = new Map();
     for (const row of fillRows) {
-      fillsSheet.addRow({
-        ...row,
-        user_created_at: formatCellDate(row.user_created_at),
-        submission_created_at: formatCellDate(row.submission_created_at),
-        answer_created_at: formatCellDate(row.answer_created_at),
+      const staffDutyKey = makeStaffDutyKey(row.staff_type, row.duty_type);
+      if (!groupedSubmissions.has(staffDutyKey)) groupedSubmissions.set(staffDutyKey, new Map());
+      const submissionMap = groupedSubmissions.get(staffDutyKey);
+      if (!submissionMap.has(row.submission_id)) {
+        submissionMap.set(row.submission_id, {
+          submission_id: row.submission_id,
+          user_id: row.user_id,
+          name: row.name,
+          staff_type: row.staff_type,
+          duty_type: row.duty_type,
+          submission_date: row.submission_date,
+          submission_created_at: row.submission_created_at,
+          answers: new Map(),
+        });
+      }
+      if (row.question_prompt) {
+        submissionMap.get(row.submission_id).answers.set(row.question_prompt, row.answer_text ?? '');
+      }
+    }
+
+    for (const config of staffDutyConfigs) {
+      const sheet = workbook.addWorksheet(config.sheetName, {
+        views: [{ state: 'frozen', ySplit: 1 }],
+      });
+      const configuredQuestions = questionsByStaffDuty.get(config.key) || [];
+      const fallbackPromptOrder = new Map();
+      const sheetSubmissionMap = groupedSubmissions.get(config.key) || new Map();
+      for (const submission of sheetSubmissionMap.values()) {
+        for (const prompt of submission.answers.keys()) {
+          if (!fallbackPromptOrder.has(prompt)) {
+            fallbackPromptOrder.set(prompt, fallbackPromptOrder.size);
+          }
+        }
+      }
+
+      const dynamicQuestions = [];
+      const seenPrompts = new Set();
+      for (const q of configuredQuestions) {
+        if (seenPrompts.has(q.prompt)) continue;
+        seenPrompts.add(q.prompt);
+        dynamicQuestions.push(q.prompt);
+      }
+      for (const prompt of fallbackPromptOrder.keys()) {
+        if (seenPrompts.has(prompt)) continue;
+        seenPrompts.add(prompt);
+        dynamicQuestions.push(prompt);
+      }
+
+      const dynamicColumns = dynamicQuestions.map((prompt, idx) => ({
+        header: prompt,
+        key: `q_${idx + 1}`,
+        width: Math.max(20, Math.min(56, String(prompt).length + 6)),
+      }));
+      sheet.columns = dynamicColumns;
+      sheet.getRow(1).font = { bold: true };
+
+      const rows = Array.from(sheetSubmissionMap.values()).sort((a, b) => {
+        const aDate = a.submission_created_at ? new Date(a.submission_created_at).getTime() : 0;
+        const bDate = b.submission_created_at ? new Date(b.submission_created_at).getTime() : 0;
+        return bDate - aDate;
+      });
+
+      rows.forEach((submission) => {
+        const rowData = {};
+        dynamicQuestions.forEach((prompt, promptIdx) => {
+          rowData[`q_${promptIdx + 1}`] = submission.answers.get(prompt) || '';
+        });
+        sheet.addRow(rowData);
       });
     }
 
