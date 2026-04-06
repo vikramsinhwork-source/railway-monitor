@@ -781,6 +781,64 @@ test('Forms analytics export XLSX: admin download, Content-Type, magic bytes, an
   assert.match(staffOnly.data.message, /dutyType is required/);
 });
 
+test('Forms analytics export preview JSON: all sheets with full rows', async () => {
+  const { adminToken, userToken, testUserId } = await setupAdminAndUser();
+
+  const createRequired = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
+    prompt: `Preview export question ${Date.now()}`,
+    is_required: true,
+    sort_order: 0,
+  });
+  assert.strictEqual(createRequired.status, 201, JSON.stringify(createRequired.data));
+
+  const allQuestionIds = await getTodayQuestionIds(userToken);
+  const submitToday = await rest('/api/forms/submissions/today', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({
+      staffType: DEFAULT_STAFF_TYPE,
+      dutyType: DEFAULT_DUTY_TYPE,
+      answers: allQuestionIds.map((questionId, index) => ({
+        question_id: questionId,
+        answer_text: index === 0 ? 'Preview export answer' : `Preview filler ${index}`,
+      })),
+    }),
+  });
+  assert.strictEqual(submitToday.status, 201, JSON.stringify(submitToday.data));
+
+  const preview = await rest(
+    `/api/forms/analytics/export/preview?staffType=${DEFAULT_STAFF_TYPE}&dutyType=${DEFAULT_DUTY_TYPE}&search=${encodeURIComponent(testUserId)}&sheetKey=${DEFAULT_STAFF_TYPE}__${DEFAULT_DUTY_TYPE}&page=1&limit=10`,
+    { headers: { Authorization: `Bearer ${adminToken}` } },
+  );
+  assert.strictEqual(preview.status, 200, JSON.stringify(preview.data));
+  assert.strictEqual(preview.data.success, true);
+  assert.ok(Array.isArray(preview.data.workbook.sheets));
+  assert.ok(preview.data.workbook.sheets.length >= 2);
+  assert.ok(preview.data.workbook.sheets.some((sheet) => sheet.key === 'export_info'));
+  assert.ok(
+    preview.data.workbook.sheets.some((sheet) => sheet.key === `${DEFAULT_STAFF_TYPE}__${DEFAULT_DUTY_TYPE}`),
+  );
+  assert.ok(preview.data.meta);
+  assert.strictEqual(preview.data.meta.mode, 'all_sheets_full');
+  assert.ok(Array.isArray(preview.data.meta.deprecated_query_params_ignored));
+  assert.ok(preview.data.meta.deprecated_query_params_ignored.includes('sheetKey'));
+
+  const nonInfoSheets = preview.data.workbook.sheets.filter((sheet) => sheet.key !== 'export_info');
+  assert.ok(nonInfoSheets.length >= 1);
+  for (const sheet of nonInfoSheets) {
+    assert.ok(Array.isArray(sheet.columns));
+    assert.ok(Array.isArray(sheet.rows));
+    assert.ok(sheet.columns.length >= 1);
+  }
+
+  const targetSheet = preview.data.workbook.sheets.find(
+    (sheet) => sheet.key === `${DEFAULT_STAFF_TYPE}__${DEFAULT_DUTY_TYPE}`,
+  );
+  assert.ok(targetSheet);
+  assert.ok(Array.isArray(targetSheet.rows));
+  assert.ok(targetSheet.rows.some((row) => row.user_id === testUserId));
+});
+
 test('GET /api/forms/submissions/me: scoped history, pagination, role guards', async () => {
   const { adminToken, userToken, userId, testUserId } = await setupAdminAndUser();
 

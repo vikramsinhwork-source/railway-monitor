@@ -979,6 +979,48 @@ spec.paths['/api/forms/analytics/summary'] = {
     },
   },
 };
+spec.paths['/api/forms/analytics/export/preview'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Preview form analytics export as sheet JSON (Admin only)',
+    description:
+      'Returns a workbook-like JSON payload for rendering the XLSX export inside Flutter. Response includes workbook metadata and full row data for all sheets in one response. Query filters mirror `/api/forms/analytics/export`. Legacy preview controls `sheetKey`, `page`, and `limit` are accepted but ignored.',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+      { name: 'q', in: 'query', schema: { type: 'string' } },
+      { name: 'status', in: 'query', schema: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] } },
+      {
+        name: 'staffType',
+        in: 'query',
+        schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+      {
+        name: 'dutyType',
+        in: 'query',
+        schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+      {
+        name: 'sheetKey',
+        in: 'query',
+        schema: { type: 'string' },
+        description: 'Deprecated for all-sheets mode. Accepted but ignored.',
+      },
+      { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 }, description: 'Deprecated for all-sheets mode. Accepted but ignored.' },
+      { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500, default: 100 }, description: 'Deprecated for all-sheets mode. Accepted but ignored.' },
+    ],
+    responses: {
+      200: { description: 'Workbook metadata plus full columns/rows for every sheet' },
+      400: { description: 'Validation error or preview row cap exceeded', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
 spec.paths['/api/forms/analytics/export'] = {
   get: {
     tags: ['Forms Analytics'],

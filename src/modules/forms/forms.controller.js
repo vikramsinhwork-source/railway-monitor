@@ -256,6 +256,30 @@ function parseAnalyticsExportQuery(query) {
   return { fromDate, toDate, search, userStatus, formContext };
 }
 
+function parseAnalyticsExportPreviewQuery(query) {
+  const parsed = parseAnalyticsExportQuery(query);
+  if (parsed.error) return parsed;
+
+  const page = parsePositiveInt(query.page, 1);
+  const limit = parsePositiveInt(query.limit, 100);
+  if (!page || !limit) {
+    return { error: { status: 400, message: 'page and limit must be positive integers' } };
+  }
+  if (limit > 500) {
+    return { error: { status: 400, message: 'limit cannot exceed 500' } };
+  }
+
+  const rawSheetKey = query.sheetKey ?? query.sheet;
+  const sheetKey = rawSheetKey == null ? null : String(rawSheetKey).trim() || null;
+
+  return {
+    ...parsed,
+    page,
+    limit,
+    sheetKey,
+  };
+}
+
 function getFormsExportMaxRows() {
   const raw = process.env.FORMS_EXPORT_MAX_ROWS;
   if (raw === undefined || raw === '') return 50000;
@@ -276,6 +300,7 @@ function formatExportFilenameTimestamp(d) {
 }
 
 const EXPORT_WORKBOOK_TITLE = 'Form submissions analytics export';
+const EXPORT_INFO_SHEET_KEY = 'export_info';
 
 function buildExportFilename(fromDate, toDate, exportedAt) {
   let range = 'all';
@@ -284,6 +309,298 @@ function buildExportFilename(fromDate, toDate, exportedAt) {
   else if (toDate) range = `to_${toDate}`;
   const ts = formatExportFilenameTimestamp(exportedAt);
   return `form-submissions-${sanitizeExportFilenamePart(range)}-${sanitizeExportFilenamePart(ts)}.xlsx`;
+}
+
+function buildExportInfoRows({ fromDate, toDate, search, userStatus, formContext, exportedAt }) {
+  return [
+    { field: 'export_generated_at', value: formatCellDate(exportedAt) },
+    { field: 'workbook_title', value: EXPORT_WORKBOOK_TITLE },
+    { field: 'filter_from_date', value: fromDate || '' },
+    { field: 'filter_to_date', value: toDate || '' },
+    { field: 'filter_search', value: search || '' },
+    { field: 'filter_status', value: userStatus || '' },
+    { field: 'filter_staff_type', value: formContext?.staffType || '' },
+    { field: 'filter_duty_type', value: formContext?.dutyType || '' },
+  ];
+}
+
+function buildAnalyticsExportQueries({ fromDate, toDate, search, userStatus, formContext }) {
+  const { clause: dateClause, replacements: dateReplacements } = submissionDateSqlForAliasS(fromDate, toDate);
+  const formStaffDutyClause = formContext
+    ? 'AND f.staff_type = :staffType AND f.duty_type = :dutyType'
+    : '';
+  const formReplacements = formContext
+    ? { staffType: formContext.staffType, dutyType: formContext.dutyType }
+    : {};
+
+  let userSearchClause = '';
+  const userSearchReplacements = {};
+  if (search) {
+    userSearchClause =
+      'AND (u.user_id ILIKE :searchLike OR u.name ILIKE :searchLike OR u.email ILIKE :searchLike)';
+    userSearchReplacements.searchLike = `%${search}%`;
+  }
+
+  let userStatusClause = '';
+  const userStatusReplacements = {};
+  if (userStatus) {
+    userStatusClause = 'AND u.status = :userStatus';
+    userStatusReplacements.userStatus = userStatus;
+  }
+
+  const baseReplacements = {
+    ...dateReplacements,
+    ...formReplacements,
+    ...userSearchReplacements,
+    ...userStatusReplacements,
+  };
+
+  const fillsCountSql = `
+    SELECT COUNT(DISTINCT s.id)::integer AS submission_row_count
+    FROM submissions s
+    INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
+    INNER JOIN forms f ON f.id = s.form_id
+    WHERE ${dateClause}
+    ${formStaffDutyClause}
+    ${userSearchClause}
+    ${userStatusClause}
+  `;
+
+  const fillsSql = `
+    SELECT
+      s.id::text AS submission_id,
+      u.id::text AS id,
+      u.user_id,
+      u.name,
+      u.email,
+      u.status,
+      u.crew_type,
+      u.head_quarter,
+      u.mobile,
+      u.created_at AS user_created_at,
+      s.submission_date::text AS submission_date,
+      s.created_at AS submission_created_at,
+      f.title AS form_title,
+      f.staff_type,
+      f.duty_type,
+      q.sort_order AS question_sort_order,
+      q.prompt AS question_prompt,
+      a.answer_text,
+      a.created_at AS answer_created_at
+    FROM submissions s
+    INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
+    INNER JOIN forms f ON f.id = s.form_id
+    LEFT JOIN answers a ON a.submission_id = s.id
+    LEFT JOIN questions q ON q.id = a.question_id
+    WHERE ${dateClause}
+    ${formStaffDutyClause}
+    ${userSearchClause}
+    ${userStatusClause}
+    ORDER BY u.user_id ASC, s.submission_date DESC, s.created_at DESC, q.sort_order ASC NULLS LAST
+  `;
+
+  const templateQuestionsSql = `
+    SELECT
+      f.staff_type,
+      f.duty_type,
+      q.prompt,
+      q.sort_order
+    FROM forms f
+    INNER JOIN questions q ON q.form_id = f.id
+    WHERE f.is_active = TRUE
+    ${formStaffDutyClause}
+    ORDER BY f.staff_type ASC, f.duty_type ASC, q.sort_order ASC, q.created_at ASC
+  `;
+
+  return {
+    baseReplacements,
+    fillsCountSql,
+    fillsSql,
+    templateQuestionsSql,
+  };
+}
+
+async function fetchAnalyticsExportSourceData(filters) {
+  const { baseReplacements, fillsCountSql, fillsSql, templateQuestionsSql } = buildAnalyticsExportQueries(filters);
+
+  const maxRows = getFormsExportMaxRows();
+  if (maxRows != null) {
+    const [countRow] = await sequelize.query(fillsCountSql, {
+      replacements: baseReplacements,
+      type: QueryTypes.SELECT,
+    });
+    const submissionRowCount = countRow?.submission_row_count ?? 0;
+    if (submissionRowCount > maxRows) {
+      return {
+        error: {
+          status: 400,
+          message: `Export would exceed ${maxRows} rows (${submissionRowCount}). Narrow the date range or filters and try again.`,
+        },
+      };
+    }
+  }
+
+  const [fillRows, templateQuestionRows] = await Promise.all([
+    sequelize.query(fillsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
+    sequelize.query(templateQuestionsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
+  ]);
+
+  return { fillRows, templateQuestionRows };
+}
+
+function buildAnalyticsExportPreviewWorkbook({
+  fillRows,
+  templateQuestionRows,
+  fromDate,
+  toDate,
+  search,
+  userStatus,
+  formContext,
+  exportedAt,
+}) {
+  const questionsByStaffDuty = new Map();
+  for (const row of templateQuestionRows) {
+    const key = makeStaffDutyKey(row.staff_type, row.duty_type);
+    if (!questionsByStaffDuty.has(key)) {
+      questionsByStaffDuty.set(key, []);
+    }
+    questionsByStaffDuty.get(key).push({
+      prompt: row.prompt,
+      sort_order: row.sort_order,
+    });
+  }
+
+  const groupedSubmissions = new Map();
+  for (const row of fillRows) {
+    const staffDutyKey = makeStaffDutyKey(row.staff_type, row.duty_type);
+    if (!groupedSubmissions.has(staffDutyKey)) groupedSubmissions.set(staffDutyKey, new Map());
+    const submissionMap = groupedSubmissions.get(staffDutyKey);
+    if (!submissionMap.has(row.submission_id)) {
+      submissionMap.set(row.submission_id, {
+        submission_id: row.submission_id,
+        user_pk: row.id,
+        user_id: row.user_id,
+        name: row.name,
+        email: row.email,
+        status: row.status,
+        crew_type: row.crew_type,
+        head_quarter: row.head_quarter,
+        mobile: row.mobile,
+        submission_date: row.submission_date,
+        submission_created_at: row.submission_created_at,
+        answers: new Map(),
+      });
+    }
+    if (row.question_prompt) {
+      submissionMap.get(row.submission_id).answers.set(row.question_prompt, row.answer_text ?? '');
+    }
+  }
+
+  const sheets = [
+    {
+      key: EXPORT_INFO_SHEET_KEY,
+      name: 'Export info',
+      columns: [
+        { key: 'field', header: 'field', width: 30 },
+        { key: 'value', header: 'value', width: 56 },
+      ],
+      rows: buildExportInfoRows({ fromDate, toDate, search, userStatus, formContext, exportedAt }),
+    },
+  ];
+
+  const staffDutyConfigs = buildStaffDutyExportConfigs(formContext);
+  for (const config of staffDutyConfigs) {
+    const configuredQuestions = questionsByStaffDuty.get(config.key) || [];
+    const fallbackPromptOrder = new Map();
+    const sheetSubmissionMap = groupedSubmissions.get(config.key) || new Map();
+    for (const submission of sheetSubmissionMap.values()) {
+      for (const prompt of submission.answers.keys()) {
+        if (!fallbackPromptOrder.has(prompt)) {
+          fallbackPromptOrder.set(prompt, fallbackPromptOrder.size);
+        }
+      }
+    }
+
+    const dynamicQuestions = [];
+    const seenPrompts = new Set();
+    for (const q of configuredQuestions) {
+      if (seenPrompts.has(q.prompt)) continue;
+      seenPrompts.add(q.prompt);
+      dynamicQuestions.push(q.prompt);
+    }
+    for (const prompt of fallbackPromptOrder.keys()) {
+      if (seenPrompts.has(prompt)) continue;
+      seenPrompts.add(prompt);
+      dynamicQuestions.push(prompt);
+    }
+
+    const columns = [
+      { key: 'user_id', header: 'User ID', width: 18 },
+      { key: 'name', header: 'Name', width: 24 },
+      { key: 'email', header: 'Email', width: 28 },
+      { key: 'status', header: 'Status', width: 14 },
+      { key: 'crew_type', header: 'Crew Type', width: 16 },
+      { key: 'head_quarter', header: 'Head Quarter', width: 18 },
+      { key: 'mobile', header: 'Mobile', width: 18 },
+      { key: 'submission_date', header: 'Submission Date', width: 16 },
+      { key: 'submission_created_at', header: 'Submitted At', width: 20 },
+      ...dynamicQuestions.map((prompt, idx) => ({
+        key: `q_${idx + 1}`,
+        header: prompt,
+        width: Math.max(20, Math.min(56, String(prompt).length + 6)),
+      })),
+    ];
+
+    const rows = Array.from(sheetSubmissionMap.values())
+      .sort((a, b) => {
+        const aDate = a.submission_created_at ? new Date(a.submission_created_at).getTime() : 0;
+        const bDate = b.submission_created_at ? new Date(b.submission_created_at).getTime() : 0;
+        return bDate - aDate;
+      })
+      .map((submission) => {
+        const row = {
+          user_id: submission.user_id || '',
+          name: submission.name || '',
+          email: submission.email || '',
+          status: submission.status || '',
+          crew_type: submission.crew_type || '',
+          head_quarter: submission.head_quarter || '',
+          mobile: submission.mobile || '',
+          submission_date: submission.submission_date || '',
+          submission_created_at: formatCellDate(submission.submission_created_at),
+        };
+
+        dynamicQuestions.forEach((prompt, promptIdx) => {
+          row[`q_${promptIdx + 1}`] = submission.answers.get(prompt) || '';
+        });
+
+        return row;
+      });
+
+    sheets.push({
+      key: config.key,
+      name: config.sheetName,
+      staff_type: config.staffType,
+      duty_type: config.dutyType,
+      columns,
+      rows,
+    });
+  }
+
+  return {
+    title: EXPORT_WORKBOOK_TITLE,
+    generated_at: formatCellDate(exportedAt),
+    filename: buildExportFilename(fromDate, toDate, exportedAt),
+    filters: {
+      from_date: fromDate,
+      to_date: toDate,
+      search: search || null,
+      status: userStatus || null,
+      staffType: formContext?.staffType || null,
+      dutyType: formContext?.dutyType || null,
+    },
+    sheets,
+  };
 }
 
 function mapSubmissionsToHistory(rows) {
@@ -1063,6 +1380,66 @@ function formatCellDate(value) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+export async function previewSubmissionAnalyticsExport(req, res) {
+  try {
+    const parsed = parseAnalyticsExportPreviewQuery(req.query);
+    if (parsed.error) {
+      return res.status(parsed.error.status).json({ success: false, message: parsed.error.message });
+    }
+    const { fromDate, toDate, search, userStatus, formContext, page, limit, sheetKey } = parsed;
+
+    const source = await fetchAnalyticsExportSourceData({ fromDate, toDate, search, userStatus, formContext });
+    if (source.error) {
+      return res.status(source.error.status).json({ success: false, message: source.error.message });
+    }
+
+    const exportedAt = new Date();
+    const workbookPreview = buildAnalyticsExportPreviewWorkbook({
+      ...source,
+      fromDate,
+      toDate,
+      search,
+      userStatus,
+      formContext,
+      exportedAt,
+    });
+
+    return res.json({
+      success: true,
+      workbook: {
+        title: workbookPreview.title,
+        generated_at: workbookPreview.generated_at,
+        filename: workbookPreview.filename,
+        filters: workbookPreview.filters,
+        sheets: workbookPreview.sheets.map((sheet) => ({
+          key: sheet.key,
+          name: sheet.name,
+          staff_type: sheet.staff_type || null,
+          duty_type: sheet.duty_type || null,
+          columns: sheet.columns,
+          rows: sheet.rows,
+          row_count: sheet.rows.length,
+          column_count: sheet.columns.length,
+        })),
+      },
+      meta: {
+        mode: 'all_sheets_full',
+        deprecated_query_params_ignored: [
+          ...(sheetKey ? ['sheetKey'] : []),
+          ...(page !== 1 ? ['page'] : []),
+          ...(limit !== 100 ? ['limit'] : []),
+        ],
+      },
+    });
+  } catch (err) {
+    logWarn('Forms', 'Preview submission analytics export error', {
+      error: err.message,
+      adminUserId: req.auth?.userId,
+    });
+    return res.status(500).json({ success: false, message: 'Failed to preview submission analytics export' });
+  }
+}
+
 export async function exportSubmissionAnalyticsXlsx(req, res) {
   try {
     const parsed = parseAnalyticsExportQuery(req.query);
@@ -1071,112 +1448,11 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
     }
     const { fromDate, toDate, search, userStatus, formContext } = parsed;
 
-    const { clause: dateClause, replacements: dateReplacements } = submissionDateSqlForAliasS(fromDate, toDate);
-    const formStaffDutyClause = formContext
-      ? 'AND f.staff_type = :staffType AND f.duty_type = :dutyType'
-      : '';
-    const formReplacements = formContext
-      ? { staffType: formContext.staffType, dutyType: formContext.dutyType }
-      : {};
-
-    let userSearchClause = '';
-    const userSearchReplacements = {};
-    if (search) {
-      userSearchClause =
-        'AND (u.user_id ILIKE :searchLike OR u.name ILIKE :searchLike OR u.email ILIKE :searchLike)';
-      userSearchReplacements.searchLike = `%${search}%`;
+    const source = await fetchAnalyticsExportSourceData({ fromDate, toDate, search, userStatus, formContext });
+    if (source.error) {
+      return res.status(source.error.status).json({ success: false, message: source.error.message });
     }
-
-    let userStatusClause = '';
-    const userStatusReplacements = {};
-    if (userStatus) {
-      userStatusClause = 'AND u.status = :userStatus';
-      userStatusReplacements.userStatus = userStatus;
-    }
-
-    const baseReplacements = {
-      ...dateReplacements,
-      ...formReplacements,
-      ...userSearchReplacements,
-      ...userStatusReplacements,
-    };
-
-    const fillsCountSql = `
-      SELECT COUNT(DISTINCT s.id)::integer AS submission_row_count
-      FROM submissions s
-      INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
-      INNER JOIN forms f ON f.id = s.form_id
-      WHERE ${dateClause}
-      ${formStaffDutyClause}
-      ${userSearchClause}
-      ${userStatusClause}
-    `;
-
-    const fillsSql = `
-      SELECT
-        s.id::text AS submission_id,
-        u.id::text AS id,
-        u.user_id,
-        u.name,
-        u.email,
-        u.status,
-        u.crew_type,
-        u.head_quarter,
-        u.mobile,
-        u.created_at AS user_created_at,
-        s.submission_date::text AS submission_date,
-        s.created_at AS submission_created_at,
-        f.title AS form_title,
-        f.staff_type,
-        f.duty_type,
-        q.sort_order AS question_sort_order,
-        q.prompt AS question_prompt,
-        a.answer_text,
-        a.created_at AS answer_created_at
-      FROM submissions s
-      INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
-      INNER JOIN forms f ON f.id = s.form_id
-      LEFT JOIN answers a ON a.submission_id = s.id
-      LEFT JOIN questions q ON q.id = a.question_id
-      WHERE ${dateClause}
-      ${formStaffDutyClause}
-      ${userSearchClause}
-      ${userStatusClause}
-      ORDER BY u.user_id ASC, s.submission_date DESC, s.created_at DESC, q.sort_order ASC NULLS LAST
-    `;
-
-    const templateQuestionsSql = `
-      SELECT
-        f.staff_type,
-        f.duty_type,
-        q.prompt,
-        q.sort_order
-      FROM forms f
-      INNER JOIN questions q ON q.form_id = f.id
-      WHERE f.is_active = TRUE
-      ${formStaffDutyClause}
-      ORDER BY f.staff_type ASC, f.duty_type ASC, q.sort_order ASC, q.created_at ASC
-    `;
-
-    const maxRows = getFormsExportMaxRows();
-    if (maxRows != null) {
-      const [countRow] = await sequelize.query(fillsCountSql, {
-        replacements: baseReplacements,
-        type: QueryTypes.SELECT,
-      });
-      const submissionRowCount = countRow?.submission_row_count ?? 0;
-      if (submissionRowCount > maxRows) {
-        return res.status(400).json({
-          success: false,
-          message: `Export would exceed ${maxRows} rows (${submissionRowCount}). Narrow the date range or filters and try again.`,
-        });
-      }
-    }
-
-    const [fillRows, templateQuestionRows] = await Promise.all([
-      sequelize.query(fillsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
-      sequelize.query(templateQuestionsSql, { replacements: baseReplacements, type: QueryTypes.SELECT }),
-    ]);
+    const { fillRows, templateQuestionRows } = source;
 
     const exportedAt = new Date();
 
@@ -1196,16 +1472,7 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
       { header: 'value', key: 'value', width: 56 },
     ];
     exportInfoSheet.getRow(1).font = { bold: true };
-    for (const row of [
-      { field: 'export_generated_at', value: formatCellDate(exportedAt) },
-      { field: 'workbook_title', value: EXPORT_WORKBOOK_TITLE },
-      { field: 'filter_from_date', value: fromDate || '' },
-      { field: 'filter_to_date', value: toDate || '' },
-      { field: 'filter_search', value: search || '' },
-      { field: 'filter_status', value: userStatus || '' },
-      { field: 'filter_staff_type', value: formContext?.staffType || '' },
-      { field: 'filter_duty_type', value: formContext?.dutyType || '' },
-    ]) {
+    for (const row of buildExportInfoRows({ fromDate, toDate, search, userStatus, formContext, exportedAt })) {
       exportInfoSheet.addRow(row);
     }
 
