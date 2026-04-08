@@ -391,7 +391,7 @@ function buildAnalyticsExportQueries({ fromDate, toDate, search, userStatus, for
     INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
     INNER JOIN forms f ON f.id = s.form_id
     LEFT JOIN answers a ON a.submission_id = s.id
-    LEFT JOIN questions q ON q.id = a.question_id
+    LEFT JOIN questions q ON q.id = a.question_id AND q.deleted_at IS NULL
     WHERE ${dateClause}
     ${formStaffDutyClause}
     ${userSearchClause}
@@ -408,6 +408,7 @@ function buildAnalyticsExportQueries({ fromDate, toDate, search, userStatus, for
     FROM forms f
     INNER JOIN questions q ON q.form_id = f.id
     WHERE f.is_active = TRUE
+    AND q.deleted_at IS NULL
     ${formStaffDutyClause}
     ORDER BY f.staff_type ASC, f.duty_type ASC, q.sort_order ASC, q.created_at ASC
   `;
@@ -511,15 +512,7 @@ function buildAnalyticsExportPreviewWorkbook({
   const staffDutyConfigs = buildStaffDutyExportConfigs(formContext);
   for (const config of staffDutyConfigs) {
     const configuredQuestions = questionsByStaffDuty.get(config.key) || [];
-    const fallbackPromptOrder = new Map();
     const sheetSubmissionMap = groupedSubmissions.get(config.key) || new Map();
-    for (const submission of sheetSubmissionMap.values()) {
-      for (const prompt of submission.answers.keys()) {
-        if (!fallbackPromptOrder.has(prompt)) {
-          fallbackPromptOrder.set(prompt, fallbackPromptOrder.size);
-        }
-      }
-    }
 
     const dynamicQuestions = [];
     const seenPrompts = new Set();
@@ -527,11 +520,6 @@ function buildAnalyticsExportPreviewWorkbook({
       if (seenPrompts.has(q.prompt)) continue;
       seenPrompts.add(q.prompt);
       dynamicQuestions.push(q.prompt);
-    }
-    for (const prompt of fallbackPromptOrder.keys()) {
-      if (seenPrompts.has(prompt)) continue;
-      seenPrompts.add(prompt);
-      dynamicQuestions.push(prompt);
     }
 
     const columns = [
@@ -1516,15 +1504,7 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
         views: [{ state: 'frozen', ySplit: 1 }],
       });
       const configuredQuestions = questionsByStaffDuty.get(config.key) || [];
-      const fallbackPromptOrder = new Map();
       const sheetSubmissionMap = groupedSubmissions.get(config.key) || new Map();
-      for (const submission of sheetSubmissionMap.values()) {
-        for (const prompt of submission.answers.keys()) {
-          if (!fallbackPromptOrder.has(prompt)) {
-            fallbackPromptOrder.set(prompt, fallbackPromptOrder.size);
-          }
-        }
-      }
 
       const dynamicQuestions = [];
       const seenPrompts = new Set();
@@ -1532,11 +1512,6 @@ export async function exportSubmissionAnalyticsXlsx(req, res) {
         if (seenPrompts.has(q.prompt)) continue;
         seenPrompts.add(q.prompt);
         dynamicQuestions.push(q.prompt);
-      }
-      for (const prompt of fallbackPromptOrder.keys()) {
-        if (seenPrompts.has(prompt)) continue;
-        seenPrompts.add(prompt);
-        dynamicQuestions.push(prompt);
       }
 
       const dynamicColumns = dynamicQuestions.map((prompt, idx) => ({
