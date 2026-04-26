@@ -10,6 +10,7 @@ import {
 } from './device.validator.js';
 import {
   createDeviceForUser,
+  deleteDeviceForUser,
   disableDeviceForUser,
   getDeviceByIdForUser,
   listDevicesForUser,
@@ -160,14 +161,30 @@ export async function remove(req, res) {
     const { id } = req.params;
     if (!isValidUuid(id)) return sendError(res, 'Invalid device id', 400);
 
+    const result = await deleteDeviceForUser(id, req.user);
+    if (!result) return sendError(res, 'Device not found', 404);
+    if (result.forbidden) return sendError(res, 'Forbidden', 403);
+
+    return sendSuccess(res, 'Device deleted successfully', { device: result.device });
+  } catch (error) {
+    logWarn('Devices', 'Failed to delete device', { error: error.message });
+    return sendError(res, 'Failed to delete device', 500);
+  }
+}
+
+export async function deactivate(req, res) {
+  try {
+    const { id } = req.params;
+    if (!isValidUuid(id)) return sendError(res, 'Invalid device id', 400);
+
     const result = await disableDeviceForUser(id, req.user);
     if (!result) return sendError(res, 'Device not found', 404);
     if (result.forbidden) return sendError(res, 'Forbidden', 403);
 
-    return sendSuccess(res, 'Device disabled successfully', { device: result.device });
+    return sendSuccess(res, 'Device deactivated successfully', { device: result.device });
   } catch (error) {
-    logWarn('Devices', 'Failed to disable device', { error: error.message });
-    return sendError(res, 'Failed to disable device', 500);
+    logWarn('Devices', 'Failed to deactivate device', { error: error.message });
+    return sendError(res, 'Failed to deactivate device', 500);
   }
 }
 
