@@ -1001,6 +1001,498 @@ spec.paths['/api/forms/analytics/users/{userId}/history'] = {
   },
 };
 
+spec.paths['/api/auth/device-token'] = {
+  post: {
+    tags: ['Auth'],
+    summary: 'Issue device token (legacy/device clients)',
+    description: 'Returns JWT token for KIOSK or MONITOR clients using shared secret.',
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['deviceId', 'role', 'secret'],
+            properties: {
+              deviceId: { type: 'string', example: 'KIOSK_01' },
+              role: { type: 'string', enum: ['KIOSK', 'MONITOR'] },
+              secret: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      200: { description: 'Device token issued' },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Invalid secret', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/auth/register'] = {
+  post: {
+    tags: ['Auth'],
+    summary: 'Legacy register endpoint',
+    description: 'Registers in-memory legacy user with userType mapping to KIOSK/MONITOR role.',
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['username', 'password', 'userType'],
+            properties: {
+              username: { type: 'string' },
+              password: { type: 'string' },
+              userType: { type: 'string', enum: ['user', 'monitor'] },
+              name: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      201: { description: 'Legacy user registered' },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      409: { description: 'User already exists', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/auth/users'] = {
+  get: {
+    tags: ['Auth'],
+    summary: 'List legacy in-memory users',
+    responses: {
+      200: { description: 'Legacy users list' },
+    },
+  },
+};
+
+spec.paths['/api/forms/questions'] = {
+  post: {
+    tags: ['Forms'],
+    summary: 'Create question in active form (Admin only)',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/CreateQuestionRequest' },
+        },
+      },
+    },
+    responses: {
+      201: { description: 'Question created' },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Division admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  get: {
+    tags: ['Forms'],
+    summary: 'List questions in active form (Admin only)',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Question list' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Division admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/forms/questions/{id}'] = {
+  get: {
+    tags: ['Forms'],
+    summary: 'Get one question by id (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Question detail' },
+      400: { description: 'Invalid id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  patch: {
+    tags: ['Forms'],
+    summary: 'Update question by id (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/UpdateQuestionRequest' } },
+      },
+    },
+    responses: {
+      200: { description: 'Question updated' },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  delete: {
+    tags: ['Forms'],
+    summary: 'Delete question by id (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Question deleted' },
+      400: { description: 'Invalid id', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Question not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/forms/analytics/summary'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Submission analytics summary (Admin only)',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Summary payload' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Division admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/forms/analytics/export/preview'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Preview analytics export data (Admin only)',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Preview payload' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Division admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/forms/analytics/export'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Export analytics as XLSX (Admin only)',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'XLSX file stream' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Division admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/divisions'] = {
+  get: {
+    tags: ['Divisions'],
+    summary: 'List divisions',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Division list' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Monitor access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  post: {
+    tags: ['Divisions'],
+    summary: 'Create division (Super admin only)',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+    },
+    responses: {
+      201: { description: 'Division created' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Super admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/divisions/{id}'] = {
+  get: {
+    tags: ['Divisions'],
+    summary: 'Get division by id',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Division detail' },
+      404: { description: 'Division not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  patch: {
+    tags: ['Divisions'],
+    summary: 'Update division (Super admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    requestBody: {
+      required: true,
+      content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+    },
+    responses: {
+      200: { description: 'Division updated' },
+      403: { description: 'Super admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Division not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/lobbies'] = {
+  get: {
+    tags: ['Lobbies'],
+    summary: 'List lobbies',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Lobby list' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  post: {
+    tags: ['Lobbies'],
+    summary: 'Create lobby (Division admin only)',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+    },
+    responses: {
+      201: { description: 'Lobby created' },
+      403: { description: 'Division admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/lobbies/{id}'] = {
+  get: {
+    tags: ['Lobbies'],
+    summary: 'Get lobby by id',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Lobby detail' },
+      404: { description: 'Lobby not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  patch: {
+    tags: ['Lobbies'],
+    summary: 'Update lobby (Division admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    requestBody: {
+      required: true,
+      content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+    },
+    responses: {
+      200: { description: 'Lobby updated' },
+      403: { description: 'Division admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Lobby not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  delete: {
+    tags: ['Lobbies'],
+    summary: 'Delete lobby (Division admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Lobby deleted' },
+      403: { description: 'Division admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Lobby not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/devices'] = {
+  get: {
+    tags: ['Devices'],
+    summary: 'List devices',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Device list' },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  post: {
+    tags: ['Devices'],
+    summary: 'Create device (Division admin only)',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+    },
+    responses: {
+      201: { description: 'Device created' },
+      403: { description: 'Division admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/devices/{id}'] = {
+  get: {
+    tags: ['Devices'],
+    summary: 'Get device by id',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Device detail' },
+      404: { description: 'Device not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  patch: {
+    tags: ['Devices'],
+    summary: 'Update device (Division admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    requestBody: {
+      required: true,
+      content: { 'application/json': { schema: { type: 'object', additionalProperties: true } } },
+    },
+    responses: {
+      200: { description: 'Device updated' },
+      403: { description: 'Division admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Device not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+  delete: {
+    tags: ['Devices'],
+    summary: 'Delete device (Division admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Device deleted' },
+      403: { description: 'Division admin access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      404: { description: 'Device not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+
+spec.paths['/api/health/summary'] = {
+  get: {
+    tags: ['Health'],
+    summary: 'Health summary',
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Health summary' } },
+  },
+};
+spec.paths['/api/health/divisions'] = {
+  get: {
+    tags: ['Health'],
+    summary: 'Health grouped by divisions',
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Division health list' } },
+  },
+};
+spec.paths['/api/health/lobbies/{id}'] = {
+  get: {
+    tags: ['Health'],
+    summary: 'Health for one lobby',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Lobby health detail' } },
+  },
+};
+spec.paths['/api/health/devices/{id}/logs'] = {
+  get: {
+    tags: ['Health'],
+    summary: 'Device health logs',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Device logs' } },
+  },
+};
+spec.paths['/api/health/devices/{id}/recover'] = {
+  post: {
+    tags: ['Health'],
+    summary: 'Trigger device recovery',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Recovery action accepted/completed' } },
+  },
+};
+
+spec.paths['/api/analytics/summary'] = {
+  get: {
+    tags: ['Analytics'],
+    summary: 'Monitoring analytics summary',
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Summary payload' } },
+  },
+};
+spec.paths['/api/analytics/sla'] = {
+  get: {
+    tags: ['Analytics'],
+    summary: 'SLA metrics',
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'SLA payload' } },
+  },
+};
+spec.paths['/api/analytics/divisions'] = {
+  get: {
+    tags: ['Analytics'],
+    summary: 'Division analytics',
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Division analytics payload' } },
+  },
+};
+spec.paths['/api/analytics/lobbies/{id}'] = {
+  get: {
+    tags: ['Analytics'],
+    summary: 'Lobby analytics',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Lobby analytics payload' } },
+  },
+};
+spec.paths['/api/analytics/devices/{id}'] = {
+  get: {
+    tags: ['Analytics'],
+    summary: 'Device analytics',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Device analytics payload' } },
+  },
+};
+spec.paths['/api/analytics/incidents'] = {
+  get: {
+    tags: ['Analytics'],
+    summary: 'Incident analytics',
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Incident list/summary payload' } },
+  },
+};
+spec.paths['/api/analytics/autoheal'] = {
+  get: {
+    tags: ['Analytics'],
+    summary: 'Auto-heal analytics',
+    security: [{ bearerAuth: [] }],
+    responses: { 200: { description: 'Auto-heal payload' } },
+  },
+};
+
+spec.paths['/health'] = {
+  get: {
+    tags: ['System'],
+    summary: 'Server health check',
+    responses: {
+      200: {
+        description: 'Service is healthy',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                status: { type: 'string', example: 'ok' },
+                timestamp: { type: 'string', format: 'date-time' },
+                service: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+
 export const swaggerSpec = spec;
 export const swaggerUiHandler = swaggerUi.serve;
 export const swaggerUiSetup = swaggerUi.setup(spec);
