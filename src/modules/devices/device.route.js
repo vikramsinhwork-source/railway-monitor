@@ -10,5 +10,6 @@ router.get('/:id', requireAuth, requireMonitor, deviceController.getById);
 router.post('/', requireAuth, requireDivisionAdmin, deviceController.create);
 router.patch('/:id', requireAuth, requireDivisionAdmin, deviceController.patch);
 router.delete('/:id', requireAuth, requireDivisionAdmin, deviceController.remove);
+router.patch('/:id/reactivate', requireAuth, requireDivisionAdmin, deviceController.reactivate);
 
 export default router;

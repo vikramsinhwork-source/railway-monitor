@@ -13,6 +13,7 @@ import {
   disableDeviceForUser,
   getDeviceByIdForUser,
   listDevicesForUser,
+  reactivateDeviceForUser,
   updateDeviceForUser,
 } from './device.service.js';
 
@@ -167,5 +168,21 @@ export async function remove(req, res) {
   } catch (error) {
     logWarn('Devices', 'Failed to disable device', { error: error.message });
     return sendError(res, 'Failed to disable device', 500);
+  }
+}
+
+export async function reactivate(req, res) {
+  try {
+    const { id } = req.params;
+    if (!isValidUuid(id)) return sendError(res, 'Invalid device id', 400);
+
+    const result = await reactivateDeviceForUser(id, req.user);
+    if (!result) return sendError(res, 'Device not found', 404);
+    if (result.forbidden) return sendError(res, 'Forbidden', 403);
+
+    return sendSuccess(res, 'Device reactivated successfully', { device: result.device });
+  } catch (error) {
+    logWarn('Devices', 'Failed to reactivate device', { error: error.message });
+    return sendError(res, 'Failed to reactivate device', 500);
   }
 }

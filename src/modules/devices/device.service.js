@@ -229,3 +229,31 @@ export async function disableDeviceForUser(id, user) {
 
   return { device: after };
 }
+
+export async function reactivateDeviceForUser(id, user) {
+  const role = normalizeRole(user.role);
+  const device = await Device.findByPk(id);
+  if (!device) return null;
+
+  if (isDivisionAdmin(role)) {
+    if (!user.division_id || user.division_id !== device.division_id) return { forbidden: true };
+  } else if (!isSuperAdmin(role)) {
+    return { forbidden: true };
+  }
+
+  const before = toDeviceResponse(device);
+  await device.update({ is_active: true });
+  await device.reload();
+  const after = toDeviceResponse(device);
+
+  await createAuditLog({
+    userId: user.id,
+    action: 'DEVICE_REACTIVATE',
+    entityType: 'device',
+    entityId: device.id,
+    oldData: before,
+    newData: after,
+  });
+
+  return { device: after };
+}
