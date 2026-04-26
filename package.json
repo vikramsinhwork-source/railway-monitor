@@ -10,10 +10,7 @@
     "test": "node --test --test-concurrency=1 tests",
     "test:parallel": "node --test tests",
     "test:live-smoke": "LIVE_SMOKE=1 node --test tests/live-smoke.test.js",
-    "monitor:live": "node scripts/live-monitor.js",
-    "docker:up": "docker compose up -d --build",
-    "docker:down": "docker compose down",
-    "docker:db": "docker compose up -d db"
+    "monitor:live": "node scripts/live-monitor.js"
   },
   "keywords": [
     "webrtc",
