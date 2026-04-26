@@ -7,14 +7,15 @@
  */
 
 import express from 'express';
-import { requireAuth, requireAdmin, requireUser } from '../../middleware/auth.middleware.js';
+import { requireAuth, requireUser } from '../../middleware/auth.middleware.js';
+import { requireDivisionAdmin } from '../../middleware/rbac.middleware.js';
 import * as usersController from './users.controller.js';
 import { avatarUploadSingle, handleAvatarUploadError } from './avatarUpload.middleware.js';
 
 const router = express.Router();
 
-router.post('/', requireAuth, requireAdmin, usersController.createUser);
-router.get('/', requireAuth, requireAdmin, usersController.listUsers);
+router.post('/', requireAuth, requireDivisionAdmin, usersController.createUser);
+router.get('/', requireAuth, requireDivisionAdmin, usersController.listUsers);
 router.get('/me', requireAuth, usersController.me);
 router.patch('/me', requireAuth, usersController.patchMe);
 router.post(
@@ -33,16 +34,16 @@ router.post(
   handleAvatarUploadError,
   usersController.enrollMyFace
 );
-router.get('/:id', requireAuth, requireAdmin, usersController.getUserById);
-router.patch('/:id/deactivate', requireAuth, requireAdmin, usersController.deactivateUser);
+router.get('/:id', requireAuth, requireDivisionAdmin, usersController.getUserById);
+router.patch('/:id/deactivate', requireAuth, requireDivisionAdmin, usersController.deactivateUser);
 router.post(
   '/:id/avatar',
   requireAuth,
-  requireAdmin,
+  requireDivisionAdmin,
   avatarUploadSingle,
   handleAvatarUploadError,
   usersController.uploadUserAvatar
 );
-router.patch('/:id', requireAuth, requireAdmin, usersController.updateUser);
+router.patch('/:id', requireAuth, requireDivisionAdmin, usersController.updateUser);
 
 export default router;

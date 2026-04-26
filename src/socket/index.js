@@ -42,11 +42,50 @@ import {
   startHeartbeatChecker
 } from '../utils/heartbeat.js';
 import {
+  buildPresenceRole,
+  cacheDisconnectForReconnect,
+  claimNextDeviceCommand,
+  completeDeviceCommand,
+  enqueueDeviceCommand,
+  endMonitoringSession,
+  endSessionsByMonitorUser,
+  getRealtimeConfig,
+  getRealtimeMetrics,
+  markSocketPresenceOffline,
+  startMonitoringSession,
+  startRealtimePresenceChecker,
+  touchSocketHeartbeat,
+  tryRestoreRecentSessions,
+  upsertSocketPresence,
+} from './realtime.manager.js';
+import {
   logInfo,
   logWarn,
   logError,
   logDebug
 } from '../utils/logger.js';
+
+/**
+ * In-memory session/call state is keyed by device UUID (Phase 4) or legacy kiosk id.
+ * App JWT kiosk sockets use `user_id` as clientId but register under payload.deviceId.
+ */
+function resolveMonitoringTargetId(data, role, clientId, socketId) {
+  const fromPayload = data?.kioskId ?? data?.deviceId;
+  if (role === ROLES.MONITOR) return fromPayload ?? null;
+  return fromPayload ?? kiosksState.getKioskBySocketId(socketId)?.kioskId ?? clientId;
+}
+
+function kioskSocketOwnsSession(session, socketId) {
+  if (!session?.kioskId) return false;
+  return kiosksState.getKiosk(session.kioskId)?.socketId === socketId;
+}
+
+function resolveWebRtcSessionKioskId(data, senderRole, clientId, targetId, socketId) {
+  if (senderRole === ROLES.KIOSK) {
+    return data?.kioskId ?? data?.deviceId ?? kiosksState.getKioskBySocketId(socketId)?.kioskId ?? clientId;
+  }
+  return data?.kioskId ?? data?.deviceId ?? targetId;
+}
 
 /**
  * Initialize Socket.IO connection handling
@@ -75,6 +114,7 @@ export const initializeSocket = (io) => {
 
   // Start periodic heartbeat timeout checking
   startHeartbeatChecker(io);
+  startRealtimePresenceChecker(io);
 
   // Session timeout disabled: monitoring sessions stay active until admin stops,
   // kiosk goes offline, or monitor/kiosk disconnects. No automatic idle timeout.
@@ -167,10 +207,11 @@ export const initializeSocket = (io) => {
      * Register KIOSK client
      * Emits kiosk-online event to all MONITOR clients
      */
-    socket.on('register-kiosk', () => {
+    socket.on('register-kiosk', async (payload = {}) => {
       logInfo('Socket', 'Register kiosk request received', {
         clientId,
-        socketId: socket.id
+        socketId: socket.id,
+        payload
       });
 
       // Guard: Only KIOSK role can register as kiosk
@@ -187,25 +228,44 @@ export const initializeSocket = (io) => {
       }
 
       try {
+        const kioskId = payload.deviceId || payload.kioskId || clientId;
         const kioskUserId = appUser ? appUser.userId : null;
         const kioskName = appUser?.name ?? null;
-        const kioskData = kiosksState.registerKiosk(clientId, socket.id, kioskUserId, kioskName);
+        const kioskData = kiosksState.registerKiosk(kioskId, socket.id, kioskUserId, kioskName);
+        socket.join(`device:${kioskId}`);
+
+        if (appUser?.userId) {
+          await upsertSocketPresence({
+            userId: appUser.userId,
+            socketId: socket.id,
+            role: buildPresenceRole({
+              socketRole: role,
+              appRole: appUser?.role,
+            }),
+            divisionId: appUser?.division_id || null,
+            lobbyId: payload.lobby_id || null,
+          });
+        }
 
         // Notify all monitors that this kiosk is online (include name for admin UI)
         io.to('monitors').emit('kiosk-online', {
-          kioskId: clientId,
-          name: kioskData.name ?? clientId,
+          kioskId,
+          name: kioskData.name ?? kioskId,
           timestamp: new Date().toISOString()
+        });
+        io.to('monitors').emit('device-online', {
+          deviceId: kioskId,
+          timestamp: new Date().toISOString(),
         });
 
         socket.emit('kiosk-registered', {
-          kioskId: clientId,
-          name: kioskData.name ?? clientId,
+          kioskId,
+          name: kioskData.name ?? kioskId,
           timestamp: new Date().toISOString()
         });
 
         logInfo('Socket', 'Kiosk registered successfully', {
-          clientId,
+          clientId: kioskId,
           socketId: socket.id,
           registeredAt: kioskData.registeredAt
         });
@@ -229,10 +289,11 @@ export const initializeSocket = (io) => {
     /**
      * Register MONITOR client
      */
-    socket.on('register-monitor', () => {
+    socket.on('register-monitor', async (payload = {}) => {
       logInfo('Socket', 'Register monitor request received', {
         clientId,
-        socketId: socket.id
+        socketId: socket.id,
+        payload
       });
 
       // Guard: Only MONITOR role can register as monitor
@@ -249,6 +310,27 @@ export const initializeSocket = (io) => {
         // Register monitor in state
         // Use socket.id as unique identifier to support multiple monitors with same credentials
         const monitorData = monitorsState.registerMonitor(`${clientId}_${socket.id}`, socket.id);
+        if (appUser?.userId) {
+          await upsertSocketPresence({
+            userId: appUser.userId,
+            socketId: socket.id,
+            role: buildPresenceRole({
+              socketRole: role,
+              appRole: appUser?.role,
+            }),
+            divisionId: appUser?.division_id || null,
+            lobbyId: payload.lobby_id || null,
+          });
+        }
+
+        const restoredSessions = appUser
+          ? await tryRestoreRecentSessions({
+            user: appUser,
+            socket,
+            clientId,
+            io,
+          })
+          : [];
 
         // Send list of online kiosks (include name for admin UI; fallback to kioskId for legacy)
         const onlineKiosks = kiosksState.getAllKiosks()
@@ -262,6 +344,11 @@ export const initializeSocket = (io) => {
         socket.emit('monitor-registered', {
           monitorId: clientId, // Return clientId for compatibility, but store with socket.id
           onlineKiosks,
+          restoredSessions: restoredSessions.map((s) => ({
+            sessionId: s.id,
+            deviceId: s.device_id,
+            status: s.status,
+          })),
           timestamp: new Date().toISOString()
         });
 
@@ -297,12 +384,78 @@ export const initializeSocket = (io) => {
       const {
         kioskId
       } = data || {};
+      const deviceId = data?.deviceId || kioskId;
 
       logInfo('Session', 'Start monitoring request received', {
         monitorId: clientId,
-        kioskId,
+        kioskId: deviceId,
         socketId: socket.id
       });
+
+      if (appUser?.userId) {
+        (async () => {
+        // Guard: Only MONITOR role can start monitoring
+        if (!validateOrError(socket, role === ROLES.MONITOR, ERROR_CODES.OPERATION_NOT_ALLOWED,
+            'Unauthorized: Only MONITOR clients can start monitoring')) {
+          logWarn('Session', 'Start monitoring failed: Invalid role', {
+            clientId,
+            role,
+            deviceId
+          });
+          return;
+        }
+
+        if (!validateOrError(socket, deviceId, ERROR_CODES.INVALID_REQUEST,
+            'Invalid request: deviceId (or kioskId) is required')) {
+          return;
+        }
+
+        try {
+          const result = await startMonitoringSession({
+            deviceId,
+            monitorUserId: userId,
+            monitorSocketId: socket.id,
+            monitorClientId: clientId,
+            user: appUser || { userId, role: 'MONITOR', division_id: null },
+          });
+
+          if (!result.ok) {
+            emitError(socket, result.code, result.message);
+            return;
+          }
+
+          sessionsState.updateSessionActivity(deviceId);
+          socket.emit('monitoring-started', {
+            kioskId: deviceId,
+            deviceId,
+            sessionId: result.dbSession.id,
+            startedAt: result.dbSession.started_at,
+            timestamp: new Date().toISOString(),
+          });
+          io.to('monitors').emit('session-status', {
+            deviceId,
+            status: 'ACTIVE',
+            sessionId: result.dbSession.id,
+            timestamp: new Date().toISOString(),
+          });
+          io.to('monitors').emit('device-online', {
+            deviceId,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          logError('Session', 'Phase 4 start-monitoring failed', {
+            clientId,
+            deviceId,
+            error: error.message,
+          });
+          emitError(socket, ERROR_CODES.INTERNAL_ERROR, 'Failed to start monitoring session', {
+            operation: 'start-monitoring',
+            deviceId,
+          });
+        }
+        })();
+        return;
+      }
 
       // Guard: Only MONITOR role can start monitoring
       if (!validateOrError(socket, role === ROLES.MONITOR, ERROR_CODES.OPERATION_NOT_ALLOWED,
@@ -409,12 +562,72 @@ export const initializeSocket = (io) => {
       const {
         kioskId
       } = data || {};
+      const deviceId = data?.deviceId || kioskId;
 
       logInfo('Session', 'Stop monitoring request received', {
         monitorId: clientId,
-        kioskId,
+        kioskId: deviceId,
         socketId: socket.id
       });
+
+      if (appUser?.userId) {
+        (async () => {
+        if (!validateOrError(socket, role === ROLES.MONITOR, ERROR_CODES.OPERATION_NOT_ALLOWED,
+            'Unauthorized: Only MONITOR clients can stop monitoring')) {
+          return;
+        }
+        if (!validateOrError(socket, deviceId, ERROR_CODES.INVALID_REQUEST,
+            'Invalid request: deviceId (or kioskId) is required')) {
+          return;
+        }
+
+        const session = sessionsState.getSession(deviceId);
+        if (!validateOrError(socket, session, ERROR_CODES.SESSION_NOT_FOUND,
+            `No active session found for device ${deviceId}`)) {
+          return;
+        }
+        if (!validateOrError(socket, session.monitorSocketId === socket.id, ERROR_CODES.SESSION_NOT_AUTHORIZED,
+            'Unauthorized: You do not own this monitoring session')) {
+          return;
+        }
+
+        try {
+          const ended = await endMonitoringSession({
+            deviceId,
+            actorUserId: userId,
+            status: 'ENDED',
+            disconnectReason: 'monitor-stop',
+          });
+          if (!ended.ok) {
+            emitError(socket, ended.code, ended.message);
+            return;
+          }
+
+          socket.emit('monitoring-stopped', {
+            kioskId: deviceId,
+            deviceId,
+            timestamp: new Date().toISOString(),
+          });
+          io.to('monitors').emit('session-status', {
+            deviceId,
+            status: 'ENDED',
+            reason: 'monitor-stop',
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          logError('Session', 'Phase 4 stop-monitoring failed', {
+            clientId,
+            deviceId,
+            error: error.message,
+          });
+          emitError(socket, ERROR_CODES.INTERNAL_ERROR, 'Failed to stop monitoring', {
+            operation: 'stop-monitoring',
+            deviceId,
+          });
+        }
+        })();
+        return;
+      }
 
       // Guard: Only MONITOR role can stop monitoring
       if (!validateOrError(socket, role === ROLES.MONITOR, ERROR_CODES.OPERATION_NOT_ALLOWED,
@@ -493,6 +706,190 @@ export const initializeSocket = (io) => {
     });
 
     /**
+     * Force Stop Monitoring Session
+     * Allowed roles: SUPER_ADMIN, DIVISION_ADMIN (app roles mapped to socket MONITOR)
+     */
+    socket.on('force-stop-monitoring', (data) => {
+      const deviceId = data?.deviceId || data?.kioskId;
+
+      (async () => {
+        if (!validateOrError(socket, role === ROLES.MONITOR, ERROR_CODES.OPERATION_NOT_ALLOWED,
+            'Unauthorized: Only monitor-class roles can force stop')) {
+          return;
+        }
+        if (!validateOrError(socket, deviceId, ERROR_CODES.INVALID_REQUEST,
+            'Invalid request: deviceId (or kioskId) is required')) {
+          return;
+        }
+        if (!validateOrError(socket, appUser && (appUser.role === 'SUPER_ADMIN' || appUser.role === 'DIVISION_ADMIN'),
+            ERROR_CODES.SESSION_NOT_AUTHORIZED, 'Only SUPER_ADMIN or DIVISION_ADMIN can force stop')) {
+          return;
+        }
+
+        try {
+          const ended = await endMonitoringSession({
+            deviceId,
+            actorUserId: userId,
+            status: 'FORCED',
+            disconnectReason: 'force-stop-monitoring',
+            force: true,
+          });
+          if (!ended.ok) {
+            emitError(socket, ended.code, ended.message);
+            return;
+          }
+
+          io.to('monitors').emit('session-status', {
+            deviceId,
+            status: 'FORCED',
+            reason: 'force-stop-monitoring',
+            timestamp: new Date().toISOString(),
+          });
+          socket.emit('monitoring-stopped', {
+            deviceId,
+            kioskId: deviceId,
+            forced: true,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          logError('Session', 'Force stop monitoring failed', {
+            clientId,
+            userId,
+            deviceId,
+            error: error.message,
+          });
+          emitError(socket, ERROR_CODES.INTERNAL_ERROR, 'Failed to force stop monitoring', {
+            operation: 'force-stop-monitoring',
+            deviceId,
+          });
+        }
+      })();
+    });
+
+    socket.on('session-status', (data) => {
+      const deviceId = data?.deviceId || data?.kioskId;
+      if (!deviceId) {
+        emitError(socket, ERROR_CODES.INVALID_REQUEST, 'deviceId (or kioskId) is required');
+        return;
+      }
+      const active = sessionsState.getSession(deviceId);
+      socket.emit('session-status', {
+        deviceId,
+        status: active ? 'ACTIVE' : 'ENDED',
+        session: active || null,
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    socket.on('enqueue-device-command', (data) => {
+      const deviceId = data?.deviceId || data?.kioskId;
+      const command = data?.command;
+      const payload = data?.payload || null;
+
+      (async () => {
+        if (!validateOrError(socket, role === ROLES.MONITOR, ERROR_CODES.OPERATION_NOT_ALLOWED,
+            'Only monitor-class roles can enqueue commands')) {
+          return;
+        }
+        if (!validateOrError(socket, deviceId && command, ERROR_CODES.INVALID_REQUEST,
+            'deviceId and command are required')) {
+          return;
+        }
+
+        const result = await enqueueDeviceCommand({
+          deviceId,
+          command,
+          payload,
+          requestedBy: userId || null,
+        });
+        if (!result.ok) {
+          emitError(socket, result.code, result.message, { deviceId, command });
+          return;
+        }
+        socket.emit('device-command-queued', {
+          queueId: result.command.id,
+          deviceId,
+          command: result.command.command,
+          status: result.command.status,
+          timestamp: new Date().toISOString(),
+        });
+        io.to(`device:${deviceId}`).emit('device-command-available', {
+          deviceId,
+          queueId: result.command.id,
+          command: result.command.command,
+          timestamp: new Date().toISOString(),
+        });
+      })();
+    });
+
+    socket.on('fetch-device-command', (data) => {
+      const deviceId = data?.deviceId || data?.kioskId || clientId;
+      (async () => {
+        if (!validateOrError(socket, role === ROLES.KIOSK, ERROR_CODES.OPERATION_NOT_ALLOWED,
+            'Only kiosk clients can fetch commands')) {
+          return;
+        }
+        if (!validateOrError(socket, deviceId, ERROR_CODES.INVALID_REQUEST,
+            'deviceId is required')) {
+          return;
+        }
+        const command = await claimNextDeviceCommand(deviceId);
+        socket.emit('device-command', {
+          deviceId,
+          command: command ? {
+            queueId: command.id,
+            command: command.command,
+            payload: command.payload,
+            requestedAt: command.requested_at,
+          } : null,
+          timestamp: new Date().toISOString(),
+        });
+      })();
+    });
+
+    socket.on('complete-device-command', (data) => {
+      const queueId = data?.queueId;
+      const success = !!data?.success;
+      const errorMessage = data?.errorMessage || null;
+      const deviceId = data?.deviceId || data?.kioskId || null;
+
+      (async () => {
+        if (!validateOrError(socket, role === ROLES.KIOSK, ERROR_CODES.OPERATION_NOT_ALLOWED,
+            'Only kiosk clients can complete commands')) {
+          return;
+        }
+        if (!validateOrError(socket, queueId, ERROR_CODES.INVALID_REQUEST,
+            'queueId is required')) {
+          return;
+        }
+        const completed = await completeDeviceCommand({
+          commandId: queueId,
+          success,
+          errorMessage,
+        });
+        if (!completed) {
+          emitError(socket, ERROR_CODES.SESSION_NOT_FOUND, 'Command queue item not found', { queueId });
+          return;
+        }
+        io.to('monitors').emit('device-command-status', {
+          queueId: completed.id,
+          deviceId: deviceId || completed.device_id,
+          status: completed.status,
+          errorMessage: completed.error_message || null,
+          timestamp: new Date().toISOString(),
+        });
+      })();
+    });
+
+    socket.on('realtime-metrics', () => {
+      socket.emit('realtime-metrics', {
+        metrics: getRealtimeMetrics(),
+        config: getRealtimeConfig(),
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    /**
      * WebRTC Signaling: Forward offer
      * 
      * Validates:
@@ -547,7 +944,7 @@ export const initializeSocket = (io) => {
       const senderRole = role;
       
       // Determine kioskId for session validation
-      const kioskId = senderRole === ROLES.KIOSK ? clientId : targetId;
+      const kioskId = resolveWebRtcSessionKioskId(data, senderRole, clientId, targetId, socket.id);
       
       // Guard: Active session must exist
       if (!validateOrError(socket, sessionsState.hasActiveSession(kioskId),
@@ -569,7 +966,7 @@ export const initializeSocket = (io) => {
         targetRole = ROLES.MONITOR;
         
         // Guard: Validate kiosk owns the session
-        if (!validateOrError(socket, session.kioskId === clientId,
+        if (!validateOrError(socket, kioskSocketOwnsSession(session, socket.id),
             ERROR_CODES.SIGNALING_UNAUTHORIZED_SENDER,
             'Unauthorized: Invalid kiosk for this session')) {
           return;
@@ -708,7 +1105,7 @@ export const initializeSocket = (io) => {
       const senderRole = role;
       
       // Determine kioskId for session validation
-      const kioskId = senderRole === ROLES.KIOSK ? clientId : targetId;
+      const kioskId = resolveWebRtcSessionKioskId(data, senderRole, clientId, targetId, socket.id);
       
       // Guard: Active session must exist
       if (!validateOrError(socket, sessionsState.hasActiveSession(kioskId),
@@ -730,7 +1127,7 @@ export const initializeSocket = (io) => {
         targetRole = ROLES.MONITOR;
         
         // Guard: Validate kiosk owns the session
-        if (!validateOrError(socket, session.kioskId === clientId,
+        if (!validateOrError(socket, kioskSocketOwnsSession(session, socket.id),
             ERROR_CODES.SIGNALING_UNAUTHORIZED_SENDER,
             'Unauthorized: Invalid kiosk for this session')) {
           return;
@@ -864,7 +1261,7 @@ export const initializeSocket = (io) => {
       const senderRole = role;
       
       // Determine kioskId for session validation
-      const kioskId = senderRole === ROLES.KIOSK ? clientId : targetId;
+      const kioskId = resolveWebRtcSessionKioskId(data, senderRole, clientId, targetId, socket.id);
       
       // Guard: Active session must exist
       if (!validateOrError(socket, sessionsState.hasActiveSession(kioskId),
@@ -886,7 +1283,7 @@ export const initializeSocket = (io) => {
         targetRole = ROLES.MONITOR;
         
         // Guard: Validate kiosk owns the session
-        if (!validateOrError(socket, session.kioskId === clientId,
+        if (!validateOrError(socket, kioskSocketOwnsSession(session, socket.id),
             ERROR_CODES.SIGNALING_UNAUTHORIZED_SENDER,
             'Unauthorized: Invalid kiosk for this session')) {
           return;
@@ -977,14 +1374,14 @@ export const initializeSocket = (io) => {
      * Heartbeat Ping
      * KIOSK clients send heartbeat to keep connection alive
      */
-    socket.on('heartbeat-ping', () => {
+    const handleHeartbeat = async () => {
       logDebug('Heartbeat', 'Heartbeat ping received', {
         clientId
       });
 
-      // Guard: Only KIOSK can send heartbeat
-      if (!validateOrError(socket, role === ROLES.KIOSK, ERROR_CODES.OPERATION_NOT_ALLOWED,
-          'Unauthorized: Only KIOSK clients can send heartbeat')) {
+      // Guard: Only KIOSK/MONITOR role can send heartbeat
+      if (!validateOrError(socket, role === ROLES.KIOSK || role === ROLES.MONITOR, ERROR_CODES.OPERATION_NOT_ALLOWED,
+          'Unauthorized: Invalid role for heartbeat')) {
         logWarn('Heartbeat', 'Heartbeat ping failed: Invalid role', {
           clientId,
           role
@@ -993,12 +1390,21 @@ export const initializeSocket = (io) => {
       }
 
       try {
-        // Process heartbeat
-        const result = processHeartbeatPing(clientId);
+        // Process heartbeat for kiosk legacy tracker
+        const result = role === ROLES.KIOSK ? processHeartbeatPing(clientId) : {
+          valid: true,
+          timestamp: new Date().toISOString(),
+        };
 
         if (result.valid) {
           // Update last seen timestamp
-          kiosksState.updateLastSeen(clientId);
+          if (role === ROLES.KIOSK) {
+            kiosksState.updateLastSeen(clientId);
+          }
+          await touchSocketHeartbeat({
+            socketId: socket.id,
+            userId,
+          });
 
           // Respond with pong
           socket.emit('heartbeat-pong', {
@@ -1025,7 +1431,9 @@ export const initializeSocket = (io) => {
           operation: 'heartbeat-ping'
         });
       }
-    });
+    };
+    socket.on('heartbeat-ping', handleHeartbeat);
+    socket.on('heartbeat', handleHeartbeat);
 
     /**
      * Crew Sign-On Event
@@ -1197,13 +1605,6 @@ export const initializeSocket = (io) => {
      * Requires active monitoring session
      */
     socket.on('call-request', (data) => {
-      // Log immediately to verify event is received
-      console.log('[DEBUG] call-request event received', {
-        clientId,
-        role,
-        data
-      });
-
       const {
         kioskId
       } = data || {};
@@ -1215,8 +1616,7 @@ export const initializeSocket = (io) => {
         socketId: socket.id
       });
 
-      // Determine kioskId based on role
-      const targetKioskId = role === ROLES.KIOSK ? clientId : kioskId;
+      const targetKioskId = resolveMonitoringTargetId(data, role, clientId, socket.id);
 
       if (!targetKioskId) {
         emitError(socket, ERROR_CODES.INVALID_REQUEST, 'kioskId is required');
@@ -1244,7 +1644,7 @@ export const initializeSocket = (io) => {
           return;
         }
       } else if (role === ROLES.KIOSK) {
-        if (!validateOrError(socket, session.kioskId === clientId,
+        if (!validateOrError(socket, kioskSocketOwnsSession(session, socket.id),
             ERROR_CODES.SESSION_NOT_AUTHORIZED,
             'Unauthorized: Invalid kiosk for this session')) {
           return;
@@ -1356,7 +1756,7 @@ export const initializeSocket = (io) => {
         socketId: socket.id
       });
 
-      const targetKioskId = role === ROLES.KIOSK ? clientId : kioskId;
+      const targetKioskId = resolveMonitoringTargetId(data, role, clientId, socket.id);
 
       if (!targetKioskId) {
         emitError(socket, ERROR_CODES.INVALID_REQUEST, 'kioskId is required');
@@ -1454,7 +1854,7 @@ export const initializeSocket = (io) => {
         socketId: socket.id
       });
 
-      const targetKioskId = role === ROLES.KIOSK ? clientId : kioskId;
+      const targetKioskId = resolveMonitoringTargetId(data, role, clientId, socket.id);
 
       if (!targetKioskId) {
         emitError(socket, ERROR_CODES.INVALID_REQUEST, 'kioskId is required');
@@ -1542,7 +1942,7 @@ export const initializeSocket = (io) => {
         socketId: socket.id
       });
 
-      const targetKioskId = role === ROLES.KIOSK ? clientId : kioskId;
+      const targetKioskId = resolveMonitoringTargetId(data, role, clientId, socket.id);
 
       if (!targetKioskId) {
         emitError(socket, ERROR_CODES.INVALID_REQUEST, 'kioskId is required');
@@ -1637,7 +2037,7 @@ export const initializeSocket = (io) => {
         socketId: socket.id
       });
 
-      const targetKioskId = role === ROLES.KIOSK ? clientId : kioskId;
+      const targetKioskId = resolveMonitoringTargetId(data, role, clientId, socket.id);
 
       if (!targetKioskId || enabled === undefined) {
         emitError(socket, ERROR_CODES.INVALID_REQUEST, 'kioskId and enabled are required');
@@ -1665,7 +2065,7 @@ export const initializeSocket = (io) => {
           return;
         }
       } else if (role === ROLES.KIOSK) {
-        if (!validateOrError(socket, session.kioskId === clientId,
+        if (!validateOrError(socket, kioskSocketOwnsSession(session, socket.id),
             ERROR_CODES.SESSION_NOT_AUTHORIZED,
             'Unauthorized: Invalid kiosk for this session')) {
           return;
@@ -1744,7 +2144,7 @@ export const initializeSocket = (io) => {
         socketId: socket.id
       });
 
-      const targetKioskId = role === ROLES.KIOSK ? clientId : kioskId;
+      const targetKioskId = resolveMonitoringTargetId(data, role, clientId, socket.id);
 
       if (!targetKioskId || enabled === undefined) {
         emitError(socket, ERROR_CODES.INVALID_REQUEST, 'kioskId and enabled are required');
@@ -1772,7 +2172,7 @@ export const initializeSocket = (io) => {
           return;
         }
       } else if (role === ROLES.KIOSK) {
-        if (!validateOrError(socket, session.kioskId === clientId,
+        if (!validateOrError(socket, kioskSocketOwnsSession(session, socket.id),
             ERROR_CODES.SESSION_NOT_AUTHORIZED,
             'Unauthorized: Invalid kiosk for this session')) {
           return;
@@ -1844,7 +2244,7 @@ export const initializeSocket = (io) => {
      * - Clean up rate limits
      * - Clean up user session tracking
      */
-    socket.on('disconnect', (reason) => {
+    socket.on('disconnect', async (reason) => {
       // Clean up user session tracking
       if (userId && appUser) {
         userSessionsState.removeUserSession(userId, socket.id);
@@ -1858,6 +2258,20 @@ export const initializeSocket = (io) => {
       });
 
       try {
+        const offlineReason = reason === 'ping timeout'
+          ? 'TIMEOUT'
+          : reason === 'transport close'
+            ? 'NETWORK_LOST'
+            : reason === 'server shutting down'
+              ? 'SERVER_RESTART'
+              : 'MANUAL_DISCONNECT';
+
+        await markSocketPresenceOffline({
+          socketId: socket.id,
+          userId,
+          reason: offlineReason,
+        });
+
         if (role === ROLES.KIOSK) {
           // Remove heartbeat tracking for this connection
           removeHeartbeat(clientId);
@@ -1876,6 +2290,14 @@ export const initializeSocket = (io) => {
 
           // End any active sessions for this kiosk (only relevant when this socket owned the kiosk)
           const endedSession = thisSocketOwnsKiosk ? sessionsState.endSessionByKiosk(clientId) : null;
+          if (thisSocketOwnsKiosk && endedSession) {
+            await endMonitoringSession({
+              deviceId: clientId,
+              actorUserId: userId,
+              status: 'TIMEOUT',
+              disconnectReason: 'kiosk-disconnect',
+            });
+          }
 
           if (thisSocketOwnsKiosk) {
             // Notify monitors of kiosk going offline (include name for admin UI)
@@ -1920,10 +2342,29 @@ export const initializeSocket = (io) => {
         } else if (role === ROLES.MONITOR) {
           // End all active sessions owned by this monitor (one monitor can have multiple kiosk sessions)
           const endedSessions = sessionsState.endSessionByMonitorSocket(socket.id);
+          await cacheDisconnectForReconnect({
+            userId,
+            sessions: endedSessions.map((s) => ({
+              division_id: null,
+              lobby_id: null,
+              device_id: s.kioskId,
+            })),
+          });
+          await endSessionsByMonitorUser({
+            monitorUserId: userId,
+            status: 'TIMEOUT',
+            disconnectReason: 'monitor-disconnect',
+          });
           for (const endedSession of endedSessions) {
             io.to('monitors').emit('session-ended', {
               kioskId: endedSession.kioskId,
               monitorId: clientId,
+              reason: 'monitor-disconnect',
+              timestamp: new Date().toISOString()
+            });
+            io.to('monitors').emit('session-status', {
+              deviceId: endedSession.kioskId,
+              status: 'TIMEOUT',
               reason: 'monitor-disconnect',
               timestamp: new Date().toISOString()
             });

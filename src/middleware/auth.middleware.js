@@ -3,10 +3,10 @@
  */
 
 import jwt from 'jsonwebtoken';
-import User from '../modules/users/user.model.js';
-import { logWarn } from '../utils/logger.js';
+import { normalizeRole } from './rbac.middleware.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-production';
+const ADMIN_ROLES = new Set(['SUPER_ADMIN', 'DIVISION_ADMIN']);
 
 export function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization;
@@ -18,10 +18,24 @@ export function requireAuth(req, res, next) {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    if (!decoded.userId) {
+    const userId = decoded.id || decoded.userId;
+    if (!userId) {
       return res.status(401).json({ success: false, message: 'Invalid token' });
     }
-    req.auth = { userId: decoded.userId, role: decoded.role, user_id: decoded.user_id };
+
+    const role = normalizeRole(decoded.role);
+    const user = {
+      id: userId,
+      role,
+      division_id: decoded.division_id || null,
+      email: decoded.email || null,
+      name: decoded.name || null,
+      user_id: decoded.user_id || null,
+    };
+
+    req.user = user;
+    // Legacy compatibility for existing controllers.
+    req.auth = { userId: user.id, role: user.role, user_id: user.user_id, division_id: user.division_id };
     return next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -33,7 +47,7 @@ export function requireAuth(req, res, next) {
 
 export async function requireAdmin(req, res, next) {
   if (!req.auth) return res.status(401).json({ success: false, message: 'Authentication required' });
-  if (req.auth.role !== 'ADMIN') {
+  if (!ADMIN_ROLES.has(req.auth.role)) {
     return res.status(403).json({ success: false, message: 'Admin access required' });
   }
   next();

@@ -1,6 +1,6 @@
 /**
  * Auth controller: POST /api/auth/login, POST /api/auth/signup.
- * Returns JWT with userId, role; response: accessToken, role, user.
+ * Returns JWT with id, role, division_id, email, name (plus legacy userId/user_id claims).
  */
 
 import bcrypt from 'bcrypt';
@@ -8,15 +8,21 @@ import jwt from 'jsonwebtoken';
 import User from '../users/user.model.js';
 import { logInfo, logWarn } from '../../utils/logger.js';
 import { toUserResponse } from '../users/userResponse.js';
+import { normalizeRole } from '../../middleware/rbac.middleware.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-production';
 
 function signAccessToken(user) {
+  const normalizedRole = normalizeRole(user.role);
   const payload = {
+    id: user.id,
+    // Backward-compatible claims
     userId: user.id,
-    role: user.role,
-    user_id: user.user_id,
+    role: normalizedRole,
+    division_id: user.division_id || null,
+    email: user.email || null,
     name: user.name,
+    user_id: user.user_id,
   };
   return jwt.sign(payload, JWT_SECRET);
 }

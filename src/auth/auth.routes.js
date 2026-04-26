@@ -47,7 +47,7 @@ if (users.size === 0) {
 /**
  * POST /api/auth/login
  *
- * Application login: body { user_id, password }. Returns accessToken, role, user (JWT has userId, role ADMIN|USER).
+ * Application login: body { user_id, password }. Returns accessToken, role, user (JWT includes id/role/division_id).
  */
 router.post('/login', (req, res, next) => {
   authController.login(req, res).catch(next);

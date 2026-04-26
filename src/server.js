@@ -11,10 +11,15 @@ import { seedAdmin } from './bootstrap/seedAdmin.js';
 import { seedRoleDutyTemplates } from './bootstrap/seedRoleDutyTemplates.js';
 import { logInfo, logWarn, logError } from './utils/logger.js';
 import authRoutes from './auth/auth.routes.js';
-import './modules/users/userFaceProfile.model.js';
 import usersRoutes from './modules/users/users.routes.js';
-import { initFormModels } from './modules/forms/index.js';
+import { initModels } from './models/index.js';
 import formsRoutes from './modules/forms/forms.routes.js';
+import divisionRoutes from './modules/divisions/division.route.js';
+import lobbyRoutes from './modules/lobbies/lobby.route.js';
+import deviceRoutes from './modules/devices/device.route.js';
+import healthRoutes from './modules/health/health.routes.js';
+import analyticsRoutes from './modules/analytics/analytics.routes.js';
+import { startDeviceHealthScheduler } from './services/deviceHealth.scheduler.js';
 
 const app = express();
 const server = createServer(app);
@@ -26,7 +31,7 @@ const allowedOrigins = (() => {
   return raw.split(',').map((o) => o.trim()).filter(Boolean);
 })();
 const corsAllowAll = allowedOrigins === true;
-initFormModels();
+initModels();
 
 async function initDB() {
   try {
@@ -68,6 +73,11 @@ logInfo('Server', 'Swagger UI at /api-docs');
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/forms', formsRoutes);
+app.use('/api/divisions', divisionRoutes);
+app.use('/api/lobbies', lobbyRoutes);
+app.use('/api/devices', deviceRoutes);
+app.use('/api/health', healthRoutes);
+app.use('/api/analytics', analyticsRoutes);
 logInfo('Server', 'Auth and user routes registered', {
   auth: ['/api/auth/login', '/api/auth/signup', '/api/auth/device-token', '/api/auth/register', '/api/auth/users'],
   users: [
@@ -90,7 +100,35 @@ logInfo('Server', 'Auth and user routes registered', {
     '/api/forms/submissions/me/latest',
     '/api/forms/analytics/users',
     '/api/forms/analytics/users/:userId/history',
-  ]
+  ],
+  divisions: [
+    '/api/divisions',
+    '/api/divisions/:id',
+  ],
+  lobbies: [
+    '/api/lobbies',
+    '/api/lobbies/:id',
+  ],
+  devices: [
+    '/api/devices',
+    '/api/devices/:id',
+  ],
+  health: [
+    '/api/health/summary',
+    '/api/health/divisions',
+    '/api/health/lobbies/:id',
+    '/api/health/devices/:id/logs',
+    '/api/health/devices/:id/recover',
+  ],
+  analytics: [
+    '/api/analytics/summary',
+    '/api/analytics/sla',
+    '/api/analytics/divisions',
+    '/api/analytics/lobbies/:id',
+    '/api/analytics/devices/:id',
+    '/api/analytics/incidents',
+    '/api/analytics/autoheal',
+  ],
 });
 
 /**
@@ -121,6 +159,7 @@ logInfo('Server', 'Authentication middleware applied to Socket.IO');
 
 // Initialize socket event handlers
 initializeSocket(io);
+startDeviceHealthScheduler(io);
 logInfo('Server', 'Socket event handlers initialized');
 
 const PORT = process.env.PORT || 3000;

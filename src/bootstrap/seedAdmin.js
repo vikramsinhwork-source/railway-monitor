@@ -9,11 +9,11 @@ import { logInfo } from '../utils/logger.js';
 
 const SEEDED_USERS = [
   // Keep primary admin credentials used by tests.
-  { user_id: 'admin', name: 'Admin', password: 'admin123', role: 'ADMIN', email: 'admin@gmail.com' },
-  { user_id: 'admin2', name: 'Admin 2', password: 'admin2123', role: 'ADMIN', email: null },
-  { user_id: 'admin3', name: 'Admin 3', password: 'admin3123', role: 'ADMIN', email: null },
-  { user_id: 'admin4', name: 'Admin 4', password: 'admin4123', role: 'ADMIN', email: null },
-  { user_id: 'admin5', name: 'Admin 5', password: 'admin5123', role: 'ADMIN', email: null },
+  { user_id: 'admin', name: 'Admin', password: 'admin123', role: 'SUPER_ADMIN', email: 'admin@gmail.com' },
+  { user_id: 'admin2', name: 'Admin 2', password: 'admin2123', role: 'SUPER_ADMIN', email: null },
+  { user_id: 'admin3', name: 'Admin 3', password: 'admin3123', role: 'SUPER_ADMIN', email: null },
+  { user_id: 'admin4', name: 'Admin 4', password: 'admin4123', role: 'SUPER_ADMIN', email: null },
+  { user_id: 'admin5', name: 'Admin 5', password: 'admin5123', role: 'SUPER_ADMIN', email: null },
   { user_id: 'LOBBY', name: 'BOTAD LOBBY', password: '12345678', role: 'USER', email: null },
   { user_id: 'vp', name: 'vp', password: '12345', role: 'USER', email: null },
 ];

@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { logInfo, logWarn, logError } from '../utils/logger.js';
+import { normalizeRole } from '../middleware/rbac.middleware.js';
 
 // JWT secret key - In production, use environment variable
 const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-production';
@@ -11,6 +12,9 @@ export const ROLES = {
   KIOSK: 'KIOSK',
   MONITOR: 'MONITOR'
 };
+
+const APP_MONITOR_ROLES = new Set(['SUPER_ADMIN', 'DIVISION_ADMIN', 'MONITOR']);
+const APP_KIOSK_ROLES = new Set(['USER']);
 
 /**
  * Middleware to authenticate Socket.IO connections using JWT
@@ -40,21 +44,25 @@ export const authenticateSocket = (socket, next) => {
     // Verify JWT token
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    // Application JWT: userId + role ADMIN | USER → map to socket MONITOR | KIOSK (do not rename events)
-    if (decoded.userId && (decoded.role === 'ADMIN' || decoded.role === 'USER')) {
-      const socketRole = decoded.role === 'ADMIN' ? ROLES.MONITOR : ROLES.KIOSK;
-      const clientId = decoded.user_id || decoded.userId;
+    // Application JWT: userId + role -> map to socket MONITOR | KIOSK (do not rename events)
+    const appUserId = decoded.id || decoded.userId;
+    const appRole = normalizeRole(decoded.role);
+
+    if (appUserId && (APP_MONITOR_ROLES.has(appRole) || APP_KIOSK_ROLES.has(appRole))) {
+      const socketRole = APP_MONITOR_ROLES.has(appRole) ? ROLES.MONITOR : ROLES.KIOSK;
+      const clientId = decoded.user_id || appUserId;
       socket.data.role = socketRole;
       socket.data.clientId = String(clientId);
-      socket.data.userId = decoded.userId;
+      socket.data.userId = appUserId;
       socket.data.user = {
-        userId: decoded.userId,
-        role: decoded.role,
+        userId: appUserId,
+        role: appRole,
+        division_id: decoded.division_id || null,
         name: decoded.name ?? null,
       };
       logInfo('Auth', 'Client authenticated (app JWT)', {
         clientId: socket.data.clientId,
-        appRole: decoded.role,
+        appRole,
         socketRole,
         socketId: socket.id,
         ip: socket.handshake.address

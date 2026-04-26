@@ -21,6 +21,7 @@ import {
   indexFaceFromS3,
   deleteFacesFromCollection,
 } from '../../services/rekognitionFace.js';
+import { normalizeRole } from '../../middleware/rbac.middleware.js';
 
 const USER_RESPONSE_ATTRIBUTES = [
   'id',
@@ -28,6 +29,7 @@ const USER_RESPONSE_ATTRIBUTES = [
   'name',
   'email',
   'role',
+  'division_id',
   'status',
   'created_at',
   'updated_at',
@@ -35,6 +37,17 @@ const USER_RESPONSE_ATTRIBUTES = [
   'head_quarter',
   'mobile',
 ];
+
+const USER_ROLES = ['SUPER_ADMIN', 'DIVISION_ADMIN', 'MONITOR', 'USER'];
+const PROTECTED_ADMIN_ROLES = new Set(['SUPER_ADMIN', 'DIVISION_ADMIN']);
+
+function currentRole(req) {
+  return normalizeRole(req.user?.role || req.auth?.role);
+}
+
+function isDivisionAdmin(req) {
+  return currentRole(req) === 'DIVISION_ADMIN';
+}
 
 /** List endpoint historically omitted updated_at */
 const LIST_USER_RESPONSE_ATTRIBUTES = USER_RESPONSE_ATTRIBUTES.filter((a) => a !== 'updated_at');
@@ -60,6 +73,17 @@ export async function createUser(req, res) {
       });
     }
 
+    let division_id = req.body?.division_id || null;
+    if (isDivisionAdmin(req)) {
+      division_id = req.user?.division_id || req.auth?.division_id || null;
+      if (!division_id) {
+        return res.status(400).json({
+          success: false,
+          message: 'Division admin must be mapped to a division',
+        });
+      }
+    }
+
     const password_hash = await bcrypt.hash(password, 10);
     const user = await User.create({
       user_id,
@@ -72,6 +96,7 @@ export async function createUser(req, res) {
       crew_type: crew_type !== undefined ? crew_type || null : null,
       head_quarter: head_quarter !== undefined ? head_quarter || null : null,
       mobile: mobile !== undefined ? mobile || null : null,
+      division_id,
     });
 
     logInfo('Users', 'User created', { user_id: user.user_id, created_by: req.auth.userId });
@@ -109,7 +134,7 @@ export async function listUsers(req, res) {
     }
 
     if (role) {
-      const validRole = ['ADMIN', 'USER'].includes(role.toUpperCase()) ? role.toUpperCase() : null;
+      const validRole = USER_ROLES.includes(normalizeRole(role.toUpperCase())) ? normalizeRole(role.toUpperCase()) : null;
       if (validRole) where.role = validRole;
     }
 
@@ -118,15 +143,20 @@ export async function listUsers(req, res) {
       if (validStatus) where.status = validStatus;
     }
 
-    const hasFilters = !!(
-      searchTerm ||
-      (role && ['ADMIN', 'USER'].includes((role || '').toString().toUpperCase())) ||
-      (status && ['ACTIVE', 'INACTIVE'].includes((status || '').toString().toUpperCase()))
-    );
+    if (isDivisionAdmin(req)) {
+      const divisionId = req.user?.division_id || req.auth?.division_id || null;
+      if (!divisionId) {
+        return res.status(400).json({ success: false, message: 'Division admin missing division mapping' });
+      }
+      where.division_id = divisionId;
+    }
+
+    const whereHasConstraints =
+      Object.keys(where).length > 0 || Object.getOwnPropertySymbols(where).length > 0;
 
     const users = await User.findAll({
       attributes: [...LIST_USER_RESPONSE_ATTRIBUTES, 'profile_image_key'],
-      where: hasFilters ? where : undefined,
+      where: whereHasConstraints ? where : undefined,
       order: [['created_at', 'DESC']],
     });
 
@@ -146,6 +176,9 @@ export async function getUserById(req, res) {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
+    if (isDivisionAdmin(req) && user.division_id !== (req.user?.division_id || req.auth?.division_id || null)) {
+      return res.status(403).json({ success: false, message: 'Division access denied' });
+    }
     return res.json({ success: true, user: await toUserResponse(user) });
   } catch (err) {
     logWarn('Users', 'Get user by ID error', { error: err.message });
@@ -163,8 +196,11 @@ export async function updateUser(req, res) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    if (user.role === 'ADMIN') {
-      return res.status(403).json({ success: false, message: 'Cannot update ADMIN user' });
+    if (PROTECTED_ADMIN_ROLES.has(normalizeRole(user.role))) {
+      return res.status(403).json({ success: false, message: 'Cannot update admin user' });
+    }
+    if (isDivisionAdmin(req) && user.division_id !== (req.user?.division_id || req.auth?.division_id || null)) {
+      return res.status(403).json({ success: false, message: 'Division access denied' });
     }
 
     const updates = {};
@@ -221,8 +257,11 @@ export async function deactivateUser(req, res) {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    if (user.role === 'ADMIN') {
-      return res.status(403).json({ success: false, message: 'Cannot deactivate ADMIN' });
+    if (PROTECTED_ADMIN_ROLES.has(normalizeRole(user.role))) {
+      return res.status(403).json({ success: false, message: 'Cannot deactivate admin user' });
+    }
+    if (isDivisionAdmin(req) && user.division_id !== (req.user?.division_id || req.auth?.division_id || null)) {
+      return res.status(403).json({ success: false, message: 'Division access denied' });
     }
     await user.update({ status: 'INACTIVE' });
     logInfo('Users', 'User deactivated', { user_id: user.user_id });
@@ -388,8 +427,11 @@ export async function uploadUserAvatar(req, res) {
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-    if (user.role === 'ADMIN') {
-      return res.status(403).json({ success: false, message: 'Cannot set avatar for ADMIN user' });
+    if (PROTECTED_ADMIN_ROLES.has(normalizeRole(user.role))) {
+      return res.status(403).json({ success: false, message: 'Cannot set avatar for admin user' });
+    }
+    if (isDivisionAdmin(req) && user.division_id !== (req.user?.division_id || req.auth?.division_id || null)) {
+      return res.status(403).json({ success: false, message: 'Division access denied' });
     }
 
     const result = await saveAvatarForUser(user, req.file);

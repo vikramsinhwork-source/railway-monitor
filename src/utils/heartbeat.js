@@ -16,8 +16,8 @@ import { getKiosk, markOffline as markKioskOffline, isKioskOnline } from '../sta
 import { endSessionByKiosk } from '../state/sessions.state.js';
 
 // Heartbeat configuration (in milliseconds)
-const HEARTBEAT_INTERVAL_MS = 30000;  // KIOSK should ping every 30 seconds
-const HEARTBEAT_TIMEOUT_MS = 90000;   // Mark offline if no ping for 90 seconds
+const HEARTBEAT_INTERVAL_MS = 15000;  // Client should ping every 15 seconds
+const HEARTBEAT_TIMEOUT_MS = 45000;   // Mark offline if no ping for 45 seconds
 
 // Track last heartbeat per kiosk: Map<kioskId, lastHeartbeatTimestamp>
 const heartbeatStore = new Map();
@@ -132,7 +132,7 @@ export const getHeartbeatTimeout = () => {
  * @param {Object} io - Socket.IO server instance
  * @param {number} intervalMs - Check interval in milliseconds (default: 30 seconds)
  */
-export const startHeartbeatChecker = (io, intervalMs = 30000) => {
+export const startHeartbeatChecker = (io, intervalMs = 15000) => {
   setInterval(() => {
     checkHeartbeatTimeouts(io);
   }, intervalMs);

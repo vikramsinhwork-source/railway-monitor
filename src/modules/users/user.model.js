@@ -1,7 +1,8 @@
 /**
  * User model (Sequelize)
  * id (UUID), user_id (string unique), name, email (optional), password_hash,
- * role (ADMIN | USER), status (ACTIVE | INACTIVE), created_by, timestamps.
+ * role (SUPER_ADMIN | DIVISION_ADMIN | MONITOR | USER), status (ACTIVE | INACTIVE),
+ * optional division assignment, created_by, timestamps.
  */
 
 import { DataTypes } from 'sequelize';
@@ -34,8 +35,18 @@ const User = sequelize.define(
       allowNull: false,
     },
     role: {
-      type: DataTypes.ENUM('ADMIN', 'USER'),
+      type: DataTypes.ENUM('SUPER_ADMIN', 'DIVISION_ADMIN', 'MONITOR', 'USER'),
       allowNull: false,
+    },
+    division_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'divisions',
+        key: 'id',
+      },
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
     },
     status: {
       type: DataTypes.ENUM('ACTIVE', 'INACTIVE'),
@@ -68,6 +79,12 @@ const User = sequelize.define(
     timestamps: true,
     createdAt: 'created_at',
     updatedAt: 'updated_at',
+    indexes: [
+      {
+        fields: ['division_id'],
+        name: 'users_division_id_idx',
+      },
+    ],
     defaultScope: {
       attributes: { exclude: ['password_hash'] },
     },

@@ -20,6 +20,7 @@ Thumbs.db
 
 # Editors / IDE
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
@@ -27,11 +28,19 @@ Thumbs.db
 # Test / coverage
 coverage/
 .nyc_output/
+tests/reports/
 
 # Build / caches
 dist/
 build/
 .cache/
+tmp/
+temp/
+
+# Runtime files
+*.pid
+*.pid.lock
+*.seed
 
 # Optional local DB (if used)
 *.sqlite
