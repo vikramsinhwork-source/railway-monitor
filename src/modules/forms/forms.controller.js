@@ -1068,3 +1068,26 @@ export async function deleteTemplateQuestion(req, res) {
     return res.status(500).json({ success: false, message: 'Failed to delete template question' });
   }
 }
+
+// Placeholder analytics-export handlers to keep route bindings valid until
+// dedicated forms analytics/export implementation is added.
+export async function getSubmissionAnalyticsSummary(req, res) {
+  return res.status(501).json({
+    success: false,
+    message: 'Forms analytics summary is not implemented',
+  });
+}
+
+export async function previewSubmissionAnalyticsExport(req, res) {
+  return res.status(501).json({
+    success: false,
+    message: 'Forms analytics export preview is not implemented',
+  });
+}
+
+export async function exportSubmissionAnalyticsXlsx(req, res) {
+  return res.status(501).json({
+    success: false,
+    message: 'Forms analytics export is not implemented',
+  });
+}
