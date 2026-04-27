@@ -96,7 +96,26 @@ export async function startMonitoringSession({
   monitorClientId,
   user,
 }) {
-  const device = await Device.findByPk(deviceId);
+  const isUuid = (value) =>
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+
+  let resolvedDeviceId = deviceId;
+  if (!isUuid(deviceId)) {
+    const matchedByAlias = await Device.findOne({
+      where: {
+        [Op.or]: [
+          { device_name: deviceId },
+          { serial_number: deviceId },
+        ],
+      },
+    });
+    if (matchedByAlias?.id) {
+      resolvedDeviceId = matchedByAlias.id;
+    }
+  }
+
+  const device = await Device.findByPk(resolvedDeviceId);
   if (!device) {
     return { ok: false, code: 'SESSION_NOT_FOUND', message: 'Device not found' };
   }
@@ -110,7 +129,7 @@ export async function startMonitoringSession({
   }
 
   const existingDbSession = await MonitoringSession.findOne({
-    where: { device_id: deviceId, status: 'ACTIVE' },
+    where: { device_id: resolvedDeviceId, status: 'ACTIVE' },
     order: [['started_at', 'DESC']],
   });
   if (existingDbSession && existingDbSession.monitor_user_id !== monitorUserId) {
@@ -118,14 +137,14 @@ export async function startMonitoringSession({
     return { ok: false, code: 'SESSION_ALREADY_EXISTS', message: 'Device is already monitored by another monitor' };
   }
 
-  if (sessionsState.hasActiveSession(deviceId)) {
-    const existing = sessionsState.getSession(deviceId);
+  if (sessionsState.hasActiveSession(resolvedDeviceId)) {
+    const existing = sessionsState.getSession(resolvedDeviceId);
     if (existing?.monitorSocketId !== monitorSocketId) {
       realtimeMetrics.sessions_failed_lock += 1;
       return { ok: false, code: 'SESSION_ALREADY_EXISTS', message: 'Device lock already acquired' };
     }
   } else {
-    sessionsState.createSession(deviceId, monitorClientId, monitorSocketId, null);
+    sessionsState.createSession(resolvedDeviceId, monitorClientId, monitorSocketId, null);
   }
 
   let dbSession = existingDbSession;

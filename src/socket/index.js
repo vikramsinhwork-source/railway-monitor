@@ -87,6 +87,11 @@ function resolveWebRtcSessionKioskId(data, senderRole, clientId, targetId, socke
   return data?.kioskId ?? data?.deviceId ?? targetId;
 }
 
+function isUuid(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 /**
  * Initialize Socket.IO connection handling
  * 
@@ -411,6 +416,44 @@ export const initializeSocket = (io) => {
         }
 
         try {
+          if (!isUuid(deviceId)) {
+            const kioskOnline = kiosksState.isKioskOnline(deviceId);
+            if (!validateOrError(socket, kioskOnline, ERROR_CODES.SESSION_KIOSK_OFFLINE,
+                `Kiosk ${deviceId} is not online`)) {
+              return;
+            }
+            if (sessionsState.hasActiveSession(deviceId)) {
+              const existingSession = sessionsState.getSession(deviceId);
+              if (existingSession.monitorSocketId !== socket.id) {
+                emitError(socket, ERROR_CODES.SESSION_ALREADY_EXISTS,
+                  `Kiosk ${deviceId} is already being monitored by another monitor`, {
+                    existingMonitorId: existingSession.monitorId,
+                  });
+                return;
+              }
+              sessionsState.updateSessionActivity(deviceId);
+            } else {
+              const kiosk = kiosksState.getKiosk(deviceId);
+              const kioskUserId = kiosk?.userId ?? null;
+              sessionsState.createSession(deviceId, clientId, socket.id, kioskUserId);
+            }
+            socket.emit('monitoring-started', {
+              kioskId: deviceId,
+              deviceId,
+              sessionId: deviceId,
+              timestamp: new Date().toISOString(),
+              compatibilityMode: 'legacy-non-uuid',
+            });
+            io.to('monitors').emit('session-status', {
+              deviceId,
+              status: 'ACTIVE',
+              sessionId: deviceId,
+              compatibilityMode: 'legacy-non-uuid',
+              timestamp: new Date().toISOString(),
+            });
+            return;
+          }
+
           const result = await startMonitoringSession({
             deviceId,
             monitorUserId: userId,
