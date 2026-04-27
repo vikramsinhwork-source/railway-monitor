@@ -1,6 +1,5 @@
 import { Op } from 'sequelize';
 import Lobby from '../divisions/lobby.model.js';
-import MonitorLobbyAccess from '../access/monitorLobby.model.js';
 import { normalizeRole } from '../../middleware/rbac.middleware.js';
 import { createAuditLog } from '../audit/audit.service.js';
 
@@ -30,17 +29,6 @@ function toLobbyResponse(lobby) {
   };
 }
 
-async function getAllowedMonitorLobbyIds(userId) {
-  const assignments = await MonitorLobbyAccess.findAll({
-    where: {
-      user_id: userId,
-      is_active: true,
-    },
-    attributes: ['lobby_id'],
-  });
-  return assignments.map((row) => row.lobby_id);
-}
-
 export async function listLobbiesForUser(user, filters = {}) {
   const role = normalizeRole(user.role);
   const where = {};
@@ -63,9 +51,6 @@ export async function listLobbiesForUser(user, filters = {}) {
   } else if (isMonitor(role)) {
     if (!user.division_id) return [];
     where.division_id = user.division_id;
-    const allowedLobbyIds = await getAllowedMonitorLobbyIds(user.id);
-    if (allowedLobbyIds.length === 0) return [];
-    where.id = { [Op.in]: allowedLobbyIds };
   } else if (!isSuperAdmin(role)) {
     return [];
   }
@@ -98,8 +83,6 @@ export async function getLobbyByIdForUser(id, user) {
 
   if (isMonitor(role)) {
     if (!user.division_id || user.division_id !== lobby.division_id) return { forbidden: true };
-    const allowedLobbyIds = await getAllowedMonitorLobbyIds(user.id);
-    if (!allowedLobbyIds.includes(lobby.id)) return { forbidden: true };
     return { lobby: toLobbyResponse(lobby) };
   }
 

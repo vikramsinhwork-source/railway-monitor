@@ -1,6 +1,5 @@
 import { Op } from 'sequelize';
 import Device from '../modules/divisions/device.model.js';
-import MonitorLobbyAccess from '../modules/access/monitorLobby.model.js';
 import MonitoringSession from '../modules/realtime/monitoringSession.model.js';
 import SocketPresence from '../modules/realtime/socketPresence.model.js';
 import DeviceCommand from '../modules/realtime/deviceCommand.model.js';
@@ -86,17 +85,8 @@ async function validateMonitorLobbyAccess(user, device) {
   if (!user.division_id && user.role === 'MONITOR') return true;
   if (!user.division_id || user.division_id !== device.division_id) return false;
   if (user.role === 'DIVISION_ADMIN') return true;
-  if (user.role !== 'MONITOR') return false;
-
-  const assignment = await MonitorLobbyAccess.findOne({
-    where: {
-      user_id: user.userId,
-      division_id: device.division_id,
-      lobby_id: device.lobby_id,
-      is_active: true,
-    },
-  });
-  return !!assignment;
+  if (user.role === 'MONITOR') return true;
+  return false;
 }
 
 export async function startMonitoringSession({

@@ -1,7 +1,6 @@
 import { Op } from 'sequelize';
 import Device from '../divisions/device.model.js';
 import Lobby from '../divisions/lobby.model.js';
-import MonitorLobbyAccess from '../access/monitorLobby.model.js';
 import { normalizeRole } from '../../middleware/rbac.middleware.js';
 import { createAuditLog } from '../audit/audit.service.js';
 
@@ -40,17 +39,6 @@ function toDeviceResponse(device) {
   };
 }
 
-async function getAllowedMonitorLobbyIds(userId) {
-  const assignments = await MonitorLobbyAccess.findAll({
-    where: {
-      user_id: userId,
-      is_active: true,
-    },
-    attributes: ['lobby_id'],
-  });
-  return assignments.map((row) => row.lobby_id);
-}
-
 async function ensureLobbyBelongsToDivision(lobbyId, divisionId) {
   const lobby = await Lobby.findOne({
     where: {
@@ -86,11 +74,6 @@ export async function listDevicesForUser(user, filters = {}) {
   } else if (isMonitor(role)) {
     if (!user.division_id) return [];
     where.division_id = user.division_id;
-    const allowedLobbyIds = await getAllowedMonitorLobbyIds(user.id);
-    if (allowedLobbyIds.length === 0) return [];
-    where.lobby_id = where.lobby_id
-      ? { [Op.and]: [where.lobby_id, { [Op.in]: allowedLobbyIds }] }
-      : { [Op.in]: allowedLobbyIds };
   } else if (!isSuperAdmin(role)) {
     return [];
   }
@@ -123,8 +106,6 @@ export async function getDeviceByIdForUser(id, user) {
 
   if (isMonitor(role)) {
     if (!user.division_id || user.division_id !== device.division_id) return { forbidden: true };
-    const allowedLobbyIds = await getAllowedMonitorLobbyIds(user.id);
-    if (!allowedLobbyIds.includes(device.lobby_id)) return { forbidden: true };
     return { device: toDeviceResponse(device) };
   }
 
