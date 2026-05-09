@@ -20,8 +20,14 @@ const realtimeMetrics = {
   reconnect_restores: 0,
 };
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function now() {
   return new Date();
+}
+
+function isUuid(value) {
+  return typeof value === 'string' && UUID_REGEX.test(value);
 }
 
 function mapUserRoleToPresenceRole(userRole, socketRole) {
@@ -40,6 +46,7 @@ export async function upsertSocketPresence({ userId, socketId, role, divisionId 
   const existing = await SocketPresence.findOne({ where: { socket_id: socketId } });
   if (existing) {
     await existing.update({
+      user_id: userId,
       role,
       division_id: divisionId,
       lobby_id: lobbyId,
@@ -49,15 +56,64 @@ export async function upsertSocketPresence({ userId, socketId, role, divisionId 
     return existing;
   }
 
-  return SocketPresence.create({
-    user_id: userId,
-    socket_id: socketId,
-    role,
-    division_id: divisionId,
-    lobby_id: lobbyId,
-    last_heartbeat_at: now(),
-    is_online: true,
+  const existingForUser = await SocketPresence.findOne({
+    where: { user_id: userId, is_online: true },
+    order: [['updated_at', 'DESC']],
   });
+  if (existingForUser) {
+    await existingForUser.update({
+      socket_id: socketId,
+      role,
+      division_id: divisionId,
+      lobby_id: lobbyId,
+      last_heartbeat_at: now(),
+      is_online: true,
+    });
+    return existingForUser;
+  }
+
+  try {
+    return await SocketPresence.create({
+      user_id: userId,
+      socket_id: socketId,
+      role,
+      division_id: divisionId,
+      lobby_id: lobbyId,
+      last_heartbeat_at: now(),
+      is_online: true,
+    });
+  } catch (error) {
+    if (error?.name === 'SequelizeUniqueConstraintError') {
+      const conflictBySocket = await SocketPresence.findOne({ where: { socket_id: socketId } });
+      if (conflictBySocket) {
+        await conflictBySocket.update({
+          user_id: userId,
+          role,
+          division_id: divisionId,
+          lobby_id: lobbyId,
+          last_heartbeat_at: now(),
+          is_online: true,
+        });
+        return conflictBySocket;
+      }
+      const conflictByUser = await SocketPresence.findOne({
+        where: { user_id: userId },
+        order: [['updated_at', 'DESC']],
+      });
+      if (conflictByUser) {
+        await conflictByUser.update({
+          socket_id: socketId,
+          role,
+          division_id: divisionId,
+          lobby_id: lobbyId,
+          last_heartbeat_at: now(),
+          is_online: true,
+        });
+        return conflictByUser;
+      }
+    }
+    throw error;
+  }
 }
 
 export async function markSocketPresenceOffline({ socketId, userId, reason = null }) {
@@ -283,6 +339,16 @@ export async function tryRestoreRecentSessions({ user, socket, clientId, io }) {
 
   const restored = [];
   for (const sessionCandidate of cached.sessions) {
+    // Reconnect restore persists only DB-backed device sessions.
+    // Legacy in-memory kiosk ids (e.g. "vp") are non-UUID and must be skipped.
+    if (!isUuid(sessionCandidate.device_id)) {
+      logWarn('Realtime', 'Skipping reconnect restore for non-UUID device id', {
+        userId: user.userId,
+        deviceId: sessionCandidate.device_id,
+      });
+      continue;
+    }
+
     const existing = await MonitoringSession.findOne({
       where: { device_id: sessionCandidate.device_id, status: 'ACTIVE' },
     });

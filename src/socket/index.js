@@ -301,6 +301,15 @@ export const initializeSocket = (io) => {
         payload
       });
 
+      if (socket.data.monitorRegisteredAt) {
+        logInfo('Socket', 'Register monitor ignored: already registered for socket', {
+          clientId,
+          socketId: socket.id,
+          monitorRegisteredAt: socket.data.monitorRegisteredAt,
+        });
+        return;
+      }
+
       // Guard: Only MONITOR role can register as monitor
       if (!validateOrError(socket, role === ROLES.MONITOR, ERROR_CODES.AUTH_INVALID_ROLE,
           'Unauthorized: Only MONITOR clients can register as monitor')) {
@@ -356,6 +365,7 @@ export const initializeSocket = (io) => {
           })),
           timestamp: new Date().toISOString()
         });
+        socket.data.monitorRegisteredAt = new Date().toISOString();
 
         logInfo('Socket', 'Monitor registered successfully', {
           clientId,
