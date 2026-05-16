@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test --test-concurrency=1 tests",
+    "test": "node --import dotenv/config scripts/wait-for-server.mjs && node --import dotenv/config --test --test-concurrency=1 tests",
     "test:parallel": "node --test tests",
     "test:live-smoke": "LIVE_SMOKE=1 node --test tests/live-smoke.test.js",
     "monitor:live": "node scripts/live-monitor.js"

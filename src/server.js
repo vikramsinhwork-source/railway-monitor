@@ -20,6 +20,38 @@ import deviceRoutes from './modules/devices/device.route.js';
 import healthRoutes from './modules/health/health.routes.js';
 import analyticsRoutes from './modules/analytics/analytics.routes.js';
 import { startDeviceHealthScheduler } from './services/deviceHealth.scheduler.js';
+import { ensureCollection } from './services/rekognitionFace.js';
+import faceRoutes from './modules/face/face.routes.js';
+
+function formatDbInitError(err) {
+  if (err == null) return 'Unknown error';
+  if (typeof err === 'string') return err;
+  if (err instanceof AggregateError && err.errors?.length) {
+    const parts = err.errors.map((e) => e?.message || String(e)).filter(Boolean);
+    if (parts.length) return parts.join('; ');
+  }
+  const chain = [err.message, err.parent?.message, err.original?.message].filter(
+    (m) => typeof m === 'string' && m.trim()
+  );
+  if (chain.length) return [...new Set(chain)].join(' | ');
+  if (err.name) return err.code ? `${err.name} (${err.code})` : err.name;
+  return 'Unknown database error';
+}
+
+function assertDatabaseEnv() {
+  const required = ['DB_HOST', 'DB_NAME', 'DB_USER'];
+  const missing = required.filter((k) => !process.env[k]?.trim());
+  if (missing.length) {
+    throw new Error(
+      `Database env not configured: missing or empty ${missing.join(', ')}. Copy .env.example to .env and set PostgreSQL variables.`
+    );
+  }
+  if (process.env.DB_PASSWORD === undefined) {
+    throw new Error(
+      'Database env not configured: DB_PASSWORD is unset. Add DB_PASSWORD to .env (use DB_PASSWORD= for an empty password).'
+    );
+  }
+}
 
 const app = express();
 const server = createServer(app);
@@ -35,14 +67,16 @@ initModels();
 
 async function initDB() {
   try {
+    assertDatabaseEnv();
     await sequelize.authenticate();
     logInfo('DB', 'Sequelize authenticated');
+    await ensureCollection();
     await sequelize.sync({ alter: true });
     logInfo('DB', 'Sequelize synced');
     await seedAdmin();
     await seedRoleDutyTemplates();
   } catch (err) {
-    logError('DB', 'Init failed', { error: err.message });
+    logError('DB', 'Init failed', { error: formatDbInitError(err) });
     throw err;
   }
 }
@@ -72,6 +106,7 @@ logInfo('Server', 'Swagger UI at /api-docs');
 // Authentication API routes (application login + legacy)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api/face', faceRoutes);
 app.use('/api/forms', formsRoutes);
 app.use('/api/divisions', divisionRoutes);
 app.use('/api/lobbies', lobbyRoutes);
@@ -87,6 +122,7 @@ logInfo('Server', 'Auth and user routes registered', {
     '/api/users/me/avatar',
     '/api/users/me/face/status',
     '/api/users/me/face/enroll',
+    '/api/face/recognize',
     '/api/users/:id',
     '/api/users/:id/avatar',
     '/api/users/:id/deactivate',
@@ -195,7 +231,7 @@ initDB()
     });
   })
   .catch((err) => {
-    logError('Server', 'Startup failed', { error: err.message });
+    logError('Server', 'Startup failed', { error: formatDbInitError(err) });
     process.exit(1);
   });
 

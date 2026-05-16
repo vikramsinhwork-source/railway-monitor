@@ -1,88 +1,342 @@
-# KIOSK-MONITOR Signaling Server
+# Railway Monitoring (Kiosk–Monitor Backend)
 
-A production-aligned Node.js backend that provides WebRTC signaling and crew event broadcasting for KIOSK and MONITOR clients.
+Node.js **Express + Socket.IO** service for **WebRTC signaling**, **live monitoring sessions**, **device commands**, **crew presence events**, and **REST APIs** for users, divisions, lobbies, devices, forms, health, and analytics. The server is **view-only**: it does not terminate or process video; media flows peer-to-peer after signaling.
 
-## 🏗️ Architecture
+- **Interactive HTTP docs:** `GET /api-docs` (Swagger UI — title *Railway Monitoring API*).
+- **Main entrypoint:** `src/server.js`.
+- **Package name:** `kiosk-monitor-backend` (`package.json`).
 
-**VIEW-ONLY ARCHITECTURE**: This backend does **NOT** process video streams. It only handles:
-- WebRTC signaling message forwarding (offer, answer, ice-candidate)
-- Crew event broadcasting (sign-on/sign-off)
-- Client authentication and authorization
+---
 
-All video data flows directly between clients via WebRTC peer-to-peer connections. This server never touches video streams.
+## What is in this repository
 
-## 📁 Project Structure
+Single backend package with four layers:
+
+1. **HTTP API** — REST under `/api/*`. Wired in `src/server.js`; feature code in `src/modules/*` (routes, controllers, services, validators, Sequelize models).
+2. **Real-time** — Socket.IO in `src/socket/index.js`, with DB-backed presence/sessions/commands in `src/socket/realtime.manager.js`. Socket JWT: `src/auth/auth.middleware.js` (`authenticateSocket`).
+3. **Data** — **PostgreSQL** via **Sequelize** (`src/config/sequelize.js`), associations in `src/models/index.js`, migrations in `src/migrations/*.cjs`, seeders in `src/seeders/*.cjs`, CLI config `src/config/database.cjs` (requires `DB_*`).
+4. **Cross-cutting** — HTTP JWT (`src/middleware/auth.middleware.js`), RBAC (`src/middleware/rbac.middleware.js`), division/lobby access (`src/middleware/division-access.middleware.js`), logging (`src/utils/logger.js`), rate limits (`src/utils/rate.limiter.js`), heartbeats (`src/utils/heartbeat.js`), API helpers (`src/utils/apiResponse.js`), socket errors (`src/errors/socket.error.js`, `src/errors/error.codes.js`).
+
+**Note:** `src/auth/auth.routes.js` still contains an **in-memory** user map for legacy `POST /api/auth/register` and `GET /api/auth/users`. Primary login is **database-backed** via `src/modules/auth/auth.controller.js` (`POST /login`, `POST /signup`).
+
+---
+
+## Architecture (signaling and media)
+
+- **Signaling only:** `offer`, `answer`, `ice-candidate` are forwarded; paths require an **active monitoring session** and correct kiosk/monitor pairing (`src/socket/index.js`).
+- **crew-sign-on / crew-sign-off:** Validated and broadcast to the **`monitors`** room (`src/events/crew.events.js`).
+- **Hardening:** In-memory registry in `src/state/*.state.js`; rate limits; heartbeat + DB presence; structured socket errors; audit integration where wired (`src/modules/audit/audit.service.js`).
+
+---
+
+## Tech stack (dependencies)
+
+| Concern | Libraries |
+|--------|-----------|
+| Runtime | Node.js ESM (`"type": "module"`), Express |
+| Real-time | `socket.io`, `socket.io-client` (dev/tests) |
+| Auth | `jsonwebtoken`, `bcrypt` |
+| Database | `sequelize`, `pg`, `sequelize-cli` |
+| Docs | `swagger-jsdoc`, `swagger-ui-express` |
+| Uploads | `multer` |
+| AWS (optional) | `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`, `@aws-sdk/client-rekognition` |
+
+---
+
+## Code map
 
 ```
-backend/
- ├─ src/
- │  ├─ server.js              # Express server with Socket.IO setup
- │  ├─ socket/
- │  │   └─ index.js           # Socket.IO event handlers
- │  ├─ auth/
- │  │   └─ auth.middleware.js # JWT authentication middleware
- │  └─ events/
- │      └─ crew.events.js     # Crew event broadcasting logic
- ├─ package.json
- └─ README.md
+src/
+├── server.js                 # Express, routes, Socket.IO, DB init, device health scheduler
+├── config/
+│   ├── sequelize.js          # Sequelize (Postgres, optional SSL via DB_SSL)
+│   ├── database.cjs          # sequelize-cli
+│   └── swagger.js            # OpenAPI + /api-docs
+├── auth/
+│   ├── auth.middleware.js    # Socket JWT (app users + legacy KIOSK/MONITOR)
+│   └── auth.routes.js        # /api/auth/*
+├── middleware/
+│   ├── auth.middleware.js    # Bearer JWT: requireAuth, requireUser, requireAdmin
+│   ├── rbac.middleware.js    # requireSuperAdmin, requireDivisionAdmin, requireMonitor
+│   └── division-access.middleware.js
+├── socket/
+│   ├── index.js              # All Socket.IO handlers
+│   └── realtime.manager.js   # Presence, sessions, commands, reconnect, metrics
+├── state/                    # kiosks, monitors, sessions, user-sessions (in-memory)
+├── events/crew.events.js
+├── services/
+│   ├── s3Avatar.js
+│   ├── rekognitionFace.js
+│   └── deviceHealth.scheduler.js
+├── modules/
+│   ├── auth/
+│   ├── users/
+│   ├── divisions/
+│   ├── lobbies/
+│   ├── devices/
+│   ├── access/               # MonitorLobbyAccess
+│   ├── forms/
+│   ├── health/
+│   ├── analytics/
+│   ├── audit/
+│   └── realtime/             # MonitoringSession, SocketPresence, DeviceCommand models
+├── models/index.js
+├── migrations/*.cjs
+├── seeders/*.cjs
+├── bootstrap/                # seedAdmin, seedRoleDutyTemplates
+└── utils/
+scripts/
+└── live-monitor.js           # npm run monitor:live
+tests/                        # node:test, e2e + unit
+.github/workflows/
+└── deploy-pm2.yml            # deploy on push to main
 ```
 
-## 🚀 Quick Start
+---
 
-### Prerequisites
+## Prerequisites
 
-- Node.js 18+ (ES modules support)
+- **Node.js 18+**
+- **PostgreSQL** and `DB_*` environment variables
 
-### Installation
+---
+
+## Install, run, and scripts
 
 ```bash
-cd backend
 npm install
+npm start              # node src/server.js
+npm run dev            # node --watch src/server.js
+npm test               # node --test --test-concurrency=1 tests
+npm run test:parallel  # concurrent tests
+npm run test:live-smoke # LIVE_SMOKE=1 — scripts against a live server
+npm run monitor:live   # scripts/live-monitor.js
 ```
 
-### Running the Server
+Default HTTP port: **3000** (`PORT`).
+
+**Startup (`src/server.js`):** `sequelize.authenticate()`, **`sequelize.sync({ alter: true })`**, then `seedAdmin()` and `seedRoleDutyTemplates()` from `src/bootstrap/`, then `startDeviceHealthScheduler(io)`.
+
+---
+
+## Environment variables
+
+| Area | Variables |
+|------|-----------|
+| Server | `PORT`, `CORS_ORIGIN` or `CORS_ORIGINS` (comma-separated; empty or `*` = allow any) |
+| Database | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`; optional `DB_SSL=true` |
+| Auth | `JWT_SECRET`, `DEVICE_TOKEN_SECRET` |
+| RBAC | `RBAC_DRY_RUN=true` — log would-be 403s instead of denying (HTTP + division checks behave accordingly where implemented) |
+| Logging | `DEBUG=true` |
+| AWS (optional) | `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET`, `AWS_REKOGNITION_COLLECTION_ID`, `PROFILE_IMAGE_PUBLIC_BASE_URL`, `PROFILE_IMAGE_PRESIGN_SECONDS` |
+
+---
+
+## Database: migrations and seeders
+
+**CLI (uses `src/config/database.cjs`):**
 
 ```bash
-# Production mode
-npm start
-
-# Development mode (with auto-reload)
-npm run dev
+npx sequelize-cli db:migrate
 ```
 
-The server will start on `http://localhost:3000` by default.
+**Migration files (`src/migrations/`):**
 
-### Environment Variables
+- `20260331120000-add-role-duty-targeting-to-forms.cjs`
+- `20260423100000-phase1-multidivision-architecture.cjs`
+- `20260423120000-add-monitor-lobby-access.cjs`
+- `20260423133000-add-audit-logs.cjs`
+- `20260423134000-add-device-ops-fields.cjs`
+- `20260423150000-add-realtime-monitoring-tables.cjs`
+- `20260423162000-realtime-hardening-additions.cjs`
+- `20260423174000-device-health-platform.cjs`
 
-Create a `.env` file (optional):
+**Seeders (`src/seeders/`):**
 
-```env
-PORT=3000
-JWT_SECRET=your-secret-key-change-in-production
-DEVICE_TOKEN_SECRET=your-device-token-secret-change-in-production
-CORS_ORIGIN=http://localhost:3000
+- `20260423101000-seed-initial-divisions.cjs`
+- `20260423123000-seed-phase2-rbac-test-users.cjs`
+- `20260424120000-seed-e2e-operators-and-fixtures.cjs`
+
+**Sequelize models:** Registered and associated in `src/models/index.js` — includes `User`, `UserFaceProfile`, `Division`, `Lobby`, `Device`, `MonitorLobbyAccess`, `AuditLog`, `MonitoringSession`, `SocketPresence`, `DeviceCommand`, `DeviceLog`, `DeviceHealthSnapshot`, and form models from `src/modules/forms/index.js`.
+
+---
+
+## HTTP authentication and RBAC
+
+### JWT claims (application login / signup)
+
+`POST /api/auth/login` and `POST /api/auth/signup` return an **`accessToken`** whose payload includes (among others) `id` / `userId`, `role`, `division_id`, `user_id`, `name`, `email` (`src/modules/auth/auth.controller.js` — `signAccessToken`).
+
+Use that token as:
+
+```http
+Authorization: Bearer <accessToken>
 ```
 
-## 🔐 Authentication
+### REST role helpers (`src/middleware/auth.middleware.js`, `src/middleware/rbac.middleware.js`)
 
-All Socket.IO connections require a valid JWT token. The token must include:
-- `clientId`: Unique client identifier
-- `role`: Either `KIOSK` or `MONITOR`
+| Middleware | Meaning |
+|------------|---------|
+| `requireAuth` | Valid Bearer JWT |
+| `requireUser` | Role must be `USER` (kiosk app user) |
+| `requireSuperAdmin` | `SUPER_ADMIN` (JWT role `ADMIN` is normalized to super-admin) |
+| `requireDivisionAdmin` | `SUPER_ADMIN` or `DIVISION_ADMIN` |
+| `requireMonitor` | `SUPER_ADMIN`, `DIVISION_ADMIN`, or `MONITOR` |
 
-### Generating Test Tokens
+Set `RBAC_DRY_RUN=true` to log denials instead of returning 403 where dry-run is implemented.
 
-Use the auth middleware directly:
+---
 
-```javascript
-import { generateToken } from './src/auth/auth.middleware.js';
+## HTTP API — full route list
 
-const kioskToken = generateToken('KIOSK_01', 'KIOSK');
-const monitorToken = generateToken('MONITOR_01', 'MONITOR');
+Base URL is server root (e.g. `http://localhost:3000`). All `/api/*` routes below expect **`Authorization: Bearer`** unless noted.
+
+### Core and docs
+
+| Method | Path | Notes |
+|--------|------|--------|
+| GET | `/health` | Liveness JSON (service name `kiosk-monitor-signaling-server`) |
+| GET | `/api-docs` | Swagger UI |
+
+### `/api/auth` (`src/auth/auth.routes.js` + `auth.controller`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/auth/login` | Public | Body: `user_id`, `password`. Returns `accessToken`, `role`, `user` |
+| POST | `/api/auth/signup` | Public | Body: `user_id`, `name`, `password` (+ optional profile fields). Creates `USER`, returns token |
+| POST | `/api/auth/device-token` | Shared secret | Body: `deviceId`, `role` (`KIOSK` \| `MONITOR`), `secret` (= `DEVICE_TOKEN_SECRET`). Returns legacy-shape JWT |
+| POST | `/api/auth/register` | Public | Legacy in-memory registration |
+| GET | `/api/auth/users` | Public | Lists in-memory legacy users (dev/debug) |
+
+### `/api/users` (`src/modules/users/users.routes.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| POST | `/api/users` | requireAuth, requireDivisionAdmin |
+| GET | `/api/users` | requireAuth, requireDivisionAdmin |
+| GET | `/api/users/me` | requireAuth |
+| PATCH | `/api/users/me` | requireAuth |
+| POST | `/api/users/me/avatar` | requireAuth (multipart) |
+| GET | `/api/users/me/face/status` | requireAuth, requireUser — JSON `data.enrolled`, `data.isActive`, `data.enrolledAt` |
+| POST | `/api/users/me/face/enroll` | requireAuth, requireUser (multipart) — success body includes `data.faceId`, `data.confidence` |
+
+### `/api/face` (`src/modules/face/face.routes.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| POST | `/api/face/recognize` | requireAuth, requireMonitor (multipart **image**; SearchFacesByImage + user lookup) |
+| GET | `/api/users/:id` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/users/:id/deactivate` | requireAuth, requireDivisionAdmin |
+| POST | `/api/users/:id/avatar` | requireAuth, requireDivisionAdmin (multipart) |
+| PATCH | `/api/users/:id` | requireAuth, requireDivisionAdmin |
+
+### `/api/divisions` (`src/modules/divisions/division.route.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| GET | `/api/divisions` | requireAuth, requireMonitor |
+| GET | `/api/divisions/:id` | requireAuth, requireMonitor |
+| POST | `/api/divisions` | requireAuth, requireSuperAdmin |
+| PATCH | `/api/divisions/:id` | requireAuth, requireSuperAdmin |
+
+### `/api/lobbies` (`src/modules/lobbies/lobby.route.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| GET | `/api/lobbies` | requireAuth, requireMonitor |
+| GET | `/api/lobbies/:id` | requireAuth, requireMonitor |
+| POST | `/api/lobbies` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/lobbies/:id` | requireAuth, requireDivisionAdmin |
+| DELETE | `/api/lobbies/:id` | requireAuth, requireDivisionAdmin |
+
+### `/api/devices` (`src/modules/devices/device.route.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| GET | `/api/devices` | requireAuth, requireMonitor |
+| GET | `/api/devices/:id` | requireAuth, requireMonitor |
+| POST | `/api/devices` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/devices/:id` | requireAuth, requireDivisionAdmin |
+| DELETE | `/api/devices/:id` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/devices/:id/deactivate` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/devices/:id/reactivate` | requireAuth, requireDivisionAdmin |
+
+### `/api/forms` (`src/modules/forms/forms.routes.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| POST | `/api/forms/templates` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/templates` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/forms/templates/:id/publish` | requireAuth, requireDivisionAdmin |
+| POST | `/api/forms/templates/:templateId/questions` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/templates/:templateId/questions` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/forms/templates/:templateId/questions/:questionId` | requireAuth, requireDivisionAdmin |
+| DELETE | `/api/forms/templates/:templateId/questions/:questionId` | requireAuth, requireDivisionAdmin |
+| POST | `/api/forms/questions` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/questions` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/questions/:id` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/forms/questions/:id` | requireAuth, requireDivisionAdmin |
+| DELETE | `/api/forms/questions/:id` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/analytics/summary` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/analytics/export/preview` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/analytics/export` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/analytics/users` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/analytics/users/:userId/history` | requireAuth, requireDivisionAdmin |
+| GET | `/api/forms/today` | requireAuth, requireUser |
+| POST | `/api/forms/submissions/today` | requireAuth, requireUser |
+| GET | `/api/forms/submissions/me/latest` | requireAuth, requireUser |
+| GET | `/api/forms/submissions/me` | requireAuth, requireUser |
+
+### `/api/health` (`src/modules/health/health.routes.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| GET | `/api/health/summary` | requireAuth, requireMonitor |
+| GET | `/api/health/divisions` | requireAuth, requireMonitor |
+| GET | `/api/health/lobbies/:id` | requireAuth, requireMonitor |
+| GET | `/api/health/devices/:id/logs` | requireAuth, requireMonitor |
+| POST | `/api/health/devices/:id/recover` | requireAuth, requireDivisionAdmin |
+
+### `/api/analytics` (`src/modules/analytics/analytics.routes.js`)
+
+| Method | Path | Middleware |
+|--------|------|------------|
+| GET | `/api/analytics/summary` | requireAuth, requireMonitor |
+| GET | `/api/analytics/sla` | requireAuth, requireMonitor |
+| GET | `/api/analytics/divisions` | requireAuth, requireDivisionAdmin |
+| GET | `/api/analytics/lobbies/:id` | requireAuth, requireDivisionAdmin |
+| GET | `/api/analytics/devices/:id` | requireAuth, requireDivisionAdmin |
+| GET | `/api/analytics/incidents` | requireAuth, requireDivisionAdmin |
+| GET | `/api/analytics/autoheal` | requireAuth, requireDivisionAdmin |
+
+---
+
+## REST examples
+
+### Login
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "user_id": "operator1",
+  "password": "secret"
+}
 ```
 
-### Device token (no email/password)
+Response shape:
 
-Apps can get a JWT without login by calling:
+```json
+{
+  "success": true,
+  "accessToken": "eyJ...",
+  "role": "MONITOR",
+  "user": { }
+}
+```
+
+### Device token (no user password)
 
 ```http
 POST /api/auth/device-token
@@ -91,302 +345,255 @@ Content-Type: application/json
 {
   "deviceId": "KIOSK_01",
   "role": "KIOSK",
-  "secret": "your-device-token-secret"
+  "secret": "<DEVICE_TOKEN_SECRET>"
 }
 ```
-
-Response (same shape as login):
 
 ```json
 {
   "success": true,
   "token": "eyJ...",
-  "user": { "clientId": "KIOSK_01", "role": "KIOSK", "name": "KIOSK_01" }
+  "user": {
+    "clientId": "KIOSK_01",
+    "role": "KIOSK",
+    "name": "KIOSK_01"
+  }
 }
 ```
 
-Set `DEVICE_TOKEN_SECRET` in `.env` to match the `secret` your apps send. Default (dev only) is `device-token-secret-change-in-production`.
+---
 
-### Connecting with Authentication
+## Socket.IO authentication
+
+Connect with a JWT:
 
 ```javascript
 import io from 'socket.io-client';
 
 const socket = io('http://localhost:3000', {
-  auth: {
-    token: 'your-jwt-token-here'
-  }
+  auth: { token: accessTokenOrLegacyToken }
 });
 ```
 
-## 🔌 Socket.IO Events
+Supported JWT shapes (`src/auth/auth.middleware.js`):
 
-### Client Registration
+1. **Application user** — `id` or `userId` + `role`. Roles **`SUPER_ADMIN`**, **`DIVISION_ADMIN`**, **`MONITOR`** map to socket role **`MONITOR`**. Role **`USER`** maps to socket role **`KIOSK`**. Socket `clientId` is typically `user_id` / user id string from claims.
+2. **Legacy device token** — `clientId` + **`role`** `KIOSK` or **`MONITOR`** only (from `generateToken` / `POST /api/auth/device-token`).
 
-#### `register-kiosk`
-Emitted by KIOSK clients to register themselves.
+Kiosk registration (`register-kiosk`) additionally requires a logged-in app **`USER`** for sharing (admin socket roles are blocked from registering as kiosk).
 
-**Emit:**
-```javascript
-socket.emit('register-kiosk');
-```
+---
 
-**Response:**
-```javascript
-socket.on('kiosk-registered', (data) => {
-  console.log(data);
-  // { kioskId: 'KIOSK_01', timestamp: '2024-01-01T00:00:00.000Z' }
-});
-```
+## Socket.IO rooms
 
-**Broadcast to MONITORs:**
-```javascript
-socket.on('kiosk-online', (data) => {
-  // { kioskId: 'KIOSK_01', timestamp: '2024-01-01T00:00:00.000Z' }
-});
-```
+- **Monitors** join room `monitors`.
+- **Kiosks** join room `kiosks` and **`device:<kioskId>`** (kiosk id may come from payload `deviceId` / `kioskId` or legacy `clientId`).
 
-#### `register-monitor`
-Emitted by MONITOR clients to register themselves.
+Broadcasts such as `crew-sign-on`, `kiosk-online`, many `session-status` updates, and monitor-only fanouts use **`io.to('monitors')`**. Device-scoped commands use **`io.to('device:<deviceId>')`**.
 
-**Emit:**
-```javascript
-socket.emit('register-monitor');
-```
+---
 
-**Response:**
-```javascript
-socket.on('monitor-registered', (data) => {
-  console.log(data);
-  // {
-  //   monitorId: 'MONITOR_01',
-  //   onlineKiosks: [{ kioskId: 'KIOSK_01', connectedAt: '...' }],
-  //   timestamp: '2024-01-01T00:00:00.000Z'
-  // }
-});
-```
+## Socket.IO events — client → server
 
-### WebRTC Signaling
+| Event | Who | Purpose |
+|-------|-----|---------|
+| `register-kiosk` | KIOSK | Register device; optional payload `{ deviceId, kioskId, lobby_id }`. Updates DB presence when `userId` present |
+| `register-monitor` | MONITOR | Register monitor; optional `{ lobby_id }`. May return `restoredSessions` for app users |
+| `start-monitoring` | MONITOR | Start session. Body: `kioskId` or `deviceId`. UUID devices use DB session path; legacy ids use in-memory session |
+| `stop-monitoring` | MONITOR | End monitoring for a kiosk/device |
+| `force-stop-monitoring` | MONITOR | Force end (privileged stop) |
+| `session-status` | Any | Query: `{ deviceId \| kioskId }` → echoed `session-status` |
+| `enqueue-device-command` | MONITOR | `{ deviceId\|kioskId, command, payload? }` → queue + `device-command-available` to device room |
+| `fetch-device-command` | KIOSK | Pull next command for `deviceId` / kiosk |
+| `complete-device-command` | KIOSK | `{ queueId, success, errorMessage?, deviceId? }` → updates DB and emits `device-command-status` to monitors |
+| `realtime-metrics` | — | Server replies with metrics + config |
+| `offer` | KIOSK or MONITOR | WebRTC offer: `{ targetId, offer, kioskId? \| deviceId? }` |
+| `answer` | KIOSK or MONITOR | WebRTC answer: `{ targetId, answer, ... }` |
+| `ice-candidate` | KIOSK or MONITOR | `{ targetId, candidate, ... }` |
+| `heartbeat-ping` \| `heartbeat` | Both | Keep-alive; server may `heartbeat-pong` |
+| `crew-sign-on` | KIOSK | Payload must satisfy `validateCrewEventPayload` (see below) |
+| `crew-sign-off` | KIOSK | Same validation |
+| `call-request` | KIOSK or MONITOR | Invite peer; needs active session |
+| `call-accept` | Peer | Accept invite |
+| `call-reject` | Peer | Reject invite |
+| `call-end` | Peer | Tear down call state |
+| `toggle-video` | MONITOR | Forward control to kiosk |
+| `toggle-audio` | MONITOR | Forward control to kiosk |
 
-#### `offer`
-Forward WebRTC offer to target client.
+**Signaling prerequisites:** `offer` / `answer` / `ice-candidate` require an **active monitoring session** for the resolved kiosk/device, correct **session ownership**, kiosk↔monitor pairing, and are **rate limited** (`src/utils/rate.limiter.js`).
 
-**Emit:**
-```javascript
-socket.emit('offer', {
-  targetId: 'KIOSK_01',
-  offer: offerObject
-});
-```
+---
 
-**Receive:**
-```javascript
-socket.on('offer', (data) => {
-  // { fromId: 'KIOSK_01', offer: offerObject }
-});
-```
+## Socket.IO events — server → client (selection)
 
-#### `answer`
-Forward WebRTC answer to target client.
+| Event | When |
+|-------|------|
+| `kiosk-registered` | After successful `register-kiosk` |
+| `kiosk-online` | Broadcast to monitors when kiosk registers |
+| `device-online` | Device presence fanout |
+| `monitor-registered` | After `register-monitor` (includes `onlineKiosks`, `restoredSessions`) |
+| `monitoring-started` | Session started |
+| `monitoring-stopped` | Session ended |
+| `session-status` | Reply to query or broadcast on state changes |
+| `session-ended` | e.g. kiosk disconnect ended session |
+| `device-command-queued` | Ack to monitor |
+| `device-command-available` | Notify kiosk room |
+| `device-command` | Payload for kiosk |
+| `device-command-status` | Command completion fanout |
+| `realtime-metrics` | Metrics snapshot |
+| `offer` / `answer` / `ice-candidate` | Forwarded signaling |
+| `heartbeat-pong` | Heartbeat ack |
+| `crew-sign-on` / `crew-sign-off` | Broadcast to **monitors** with `eventType` |
+| `crew-sign-on-ack` / `crew-sign-off-ack` | To emitting kiosk |
+| `call-request`, `call-request-sent`, … | Call flow |
+| `call-accept-confirmed`, `call-reject-confirmed`, `call-end-confirmed`, … | Call flow |
+| `video-toggle-confirmed`, `audio-toggle-confirmed` | Control ack |
+| `kiosk-offline` | Kiosk disconnect cleanup |
+| `error` | Structured error (see below) |
 
-**Emit:**
-```javascript
-socket.emit('answer', {
-  targetId: 'MONITOR_01',
-  answer: answerObject
-});
-```
+---
 
-**Receive:**
-```javascript
-socket.on('answer', (data) => {
-  // { fromId: 'MONITOR_01', answer: answerObject }
-});
-```
+## Crew events — payload and broadcast
 
-#### `ice-candidate`
-Forward ICE candidate to target client.
+**Validation** (`src/events/crew.events.js`): `employeeId` (string), `name` (string), and `kioskId` (string) must be present on the **incoming** payload. The server **overwrites** `kioskId` on the broadcast with the emitting connection’s authenticated **`clientId`** for security.
 
-**Emit:**
-```javascript
-socket.emit('ice-candidate', {
-  targetId: 'KIOSK_01',
-  candidate: candidateObject
-});
-```
+**Emit (kiosk):**
 
-**Receive:**
-```javascript
-socket.on('ice-candidate', (data) => {
-  // { fromId: 'KIOSK_01', candidate: candidateObject }
-});
-```
-
-### Crew Events
-
-#### `crew-sign-on`
-Emitted by KIOSK clients when a crew member signs on.
-
-**Emit:**
 ```javascript
 socket.emit('crew-sign-on', {
   employeeId: 'EMP001',
   name: 'Demo User',
   timestamp: new Date().toISOString(),
-  kioskId: 'KIOSK_01' // Will be overridden by server for security
+  kioskId: 'KIOSK_01' // must be present for validation; broadcast uses auth client id
 });
 ```
 
-**Acknowledgment:**
+**Broadcast to monitors:**
+
+```javascript
+// { employeeId, name, timestamp, kioskId, eventType: 'crew-sign-on' | 'crew-sign-off' }
+socket.on('crew-sign-on', (data) => { /* ... */ });
+```
+
+**Ack to kiosk:**
+
 ```javascript
 socket.on('crew-sign-on-ack', (data) => {
-  // { employeeId: 'EMP001', timestamp: '2024-01-01T00:00:00.000Z' }
+  // { employeeId, timestamp }
 });
 ```
 
-**Broadcast to MONITORs:**
-```javascript
-socket.on('crew-sign-on', (data) => {
-  // {
-  //   employeeId: 'EMP001',
-  //   name: 'Demo User',
-  //   timestamp: '2024-01-01T00:00:00.000Z',
-  //   kioskId: 'KIOSK_01',
-  //   eventType: 'crew-sign-on'
-  // }
-});
-```
+---
 
-#### `crew-sign-off`
-Emitted by KIOSK clients when a crew member signs off.
+## WebRTC signaling examples
 
-**Emit:**
-```javascript
-socket.emit('crew-sign-off', {
-  employeeId: 'EMP001',
-  name: 'Demo User',
-  timestamp: new Date().toISOString(),
-  kioskId: 'KIOSK_01' // Will be overridden by server for security
-});
-```
-
-**Acknowledgment:**
-```javascript
-socket.on('crew-sign-off-ack', (data) => {
-  // { employeeId: 'EMP001', timestamp: '2024-01-01T00:00:00.000Z' }
-});
-```
-
-**Broadcast to MONITORs:**
-```javascript
-socket.on('crew-sign-off', (data) => {
-  // {
-  //   employeeId: 'EMP001',
-  //   name: 'Demo User',
-  //   timestamp: '2024-01-01T00:00:00.000Z',
-  //   kioskId: 'KIOSK_01',
-  //   eventType: 'crew-sign-off'
-  // }
-});
-```
-
-### Status Events
-
-#### `kiosk-online`
-Broadcast to MONITOR clients when a kiosk comes online.
+**Offer (monitor → kiosk or kiosk → monitor):**
 
 ```javascript
-socket.on('kiosk-online', (data) => {
-  // { kioskId: 'KIOSK_01', timestamp: '2024-01-01T00:00:00.000Z' }
+socket.emit('offer', {
+  targetId: 'KIOSK_01',
+  offer: offerObject,
+  kioskId: 'KIOSK_01' // optional hint; server resolves session kiosk
+});
+socket.on('offer', (data) => {
+  // { fromId, offer }
 });
 ```
 
-#### `kiosk-offline`
-Broadcast to MONITOR clients when a kiosk goes offline.
+**Answer:**
 
 ```javascript
-socket.on('kiosk-offline', (data) => {
-  // { kioskId: 'KIOSK_01', timestamp: '2024-01-01T00:00:00.000Z' }
+socket.emit('answer', { targetId: 'MONITOR_01', answer: answerObject });
+socket.on('answer', (data) => {
+  // { fromId, answer }
 });
 ```
 
-### Error Handling
+**ICE:**
 
 ```javascript
-socket.on('error', (error) => {
-  console.error('Socket error:', error.message);
+socket.emit('ice-candidate', { targetId: 'KIOSK_01', candidate: candidateObject });
+socket.on('ice-candidate', (data) => {
+  // { fromId, candidate }
 });
 ```
 
-## 🛡️ Security Features
+---
 
-1. **JWT Authentication**: All connections require valid JWT tokens
-2. **Role-Based Authorization**: Events are restricted by role (KIOSK vs MONITOR)
-3. **Client ID Validation**: Server validates and overrides client-provided IDs
-4. **Input Validation**: All crew events are validated before broadcasting
+## Socket error event
 
-## 📊 API Endpoints
+.validation failures and many failures emit:
 
-### `GET /health`
-Health check endpoint.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "timestamp": "2024-01-01T00:00:00.000Z",
-  "service": "kiosk-monitor-signaling-server"
-}
+```javascript
+socket.on('error', (err) => {
+  // { code, message, timestamp, ...optionalDetails }
+});
 ```
 
-## 🏭 Production Considerations
+`code` is one of `ERROR_CODES` in `src/errors/error.codes.js`:
 
-1. **JWT Secret**: Use a strong, environment-specific secret key
-2. **CORS**: Configure CORS origins appropriately
-3. **Rate Limiting**: Add rate limiting for production
-4. **Logging**: Implement structured logging (e.g., Winston, Pino)
-5. **Monitoring**: Add health checks and metrics
-6. **Database**: Replace in-memory storage with persistent storage if needed
-7. **Scaling**: Consider Redis adapter for Socket.IO clustering
-8. **SSL/TLS**: Use HTTPS/WSS in production
+`AUTH_REQUIRED`, `AUTH_INVALID_TOKEN`, `AUTH_INVALID_ROLE`, `AUTH_MISSING_CLIENT_ID`, `AUTH_TOKEN_EXPIRED`, `SESSION_NOT_AUTHORIZED`, `SESSION_ALREADY_EXISTS`, `SESSION_NOT_FOUND`, `SESSION_INVALID_PAIRING`, `SESSION_TIMEOUT`, `SESSION_KIOSK_OFFLINE`, `CLIENT_NOT_REGISTERED`, `CLIENT_ALREADY_REGISTERED`, `CLIENT_NOT_FOUND`, `SIGNALING_INVALID_TARGET`, `SIGNALING_NO_SESSION`, `SIGNALING_UNAUTHORIZED_SENDER`, `SIGNALING_INVALID_PAIRING`, `SIGNALING_MISSING_DATA`, `CREW_EVENT_INVALID_PAYLOAD`, `CREW_EVENT_RATE_LIMITED`, `CREW_EVENT_UNAUTHORIZED`, `RATE_LIMIT_EXCEEDED`, `CALL_INVALID_STATE`, `CALL_ALREADY_IN_PROGRESS`, `CALL_NOT_INITIATED`, `CALL_REQUEST_FAILED`, `INTERNAL_ERROR`, `INVALID_REQUEST`, `OPERATION_NOT_ALLOWED`.
 
-## 🧪 Testing
+---
 
-Example client connection:
+## Example: connect after login (monitor)
 
 ```javascript
 import io from 'socket.io-client';
-import { generateToken } from './src/auth/auth.middleware.js';
 
-const token = generateToken('KIOSK_01', 'KIOSK');
+const res = await fetch('http://localhost:3000/api/auth/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ user_id: 'monitor_user', password: '...' }),
+});
+const { accessToken } = await res.json();
 
 const socket = io('http://localhost:3000', {
-  auth: { token }
+  auth: { token: accessToken },
 });
 
 socket.on('connect', () => {
-  console.log('Connected!');
-  socket.emit('register-kiosk');
+  socket.emit('register-monitor', {});
 });
-
-socket.on('kiosk-registered', (data) => {
-  console.log('Registered:', data);
-  
-  // Emit crew sign-on
-  socket.emit('crew-sign-on', {
-    employeeId: 'EMP001',
-    name: 'Demo User',
-    timestamp: new Date().toISOString()
-  });
-});
+socket.on('monitor-registered', (data) => console.log(data));
+socket.on('error', console.error);
 ```
 
-## 📝 Notes
+---
 
-- This is a **signaling server only** - it does not handle video streams
-- Video data flows directly between clients via WebRTC peer connections
-- All crew events are broadcast to MONITOR clients only
-- WebRTC signaling messages are forwarded between clients without modification
-# railway-monitoring
-# railway-monitoring
-# railway-monitor
+## Example: legacy device token (kiosk)
+
+Use `token` from `POST /api/auth/device-token` in `auth.token` the same way; then `register-kiosk` with `{ deviceId: 'KIOSK_01' }` if ids must match your deployment.
+
+---
+
+## Tests
+
+```bash
+npm test
+```
+
+Suites under `tests/`: `auth`, `rbac`, `management` (divisions, lobbies, devices), `forms.lifecycle`, `realtime`, `health`, `analytics`, `audit`, `regression`, `users.*`, `live-smoke.test.js` (+ helpers in `tests/helpers/`).
+
+---
+
+## Deployment
+
+**GitHub Actions:** `.github/workflows/deploy-pm2.yml` — on push to **`main`**, self-hosted runner runs `npm ci`, **`pm2 restart railway-monitoring --update-env`**, `pm2 save`, `pm2 status`. Align the PM2 process name and app directory on the host.
+
+---
+
+## Production considerations
+
+1. **Secrets:** Strong `JWT_SECRET` and `DEVICE_TOKEN_SECRET`; never commit `.env`.
+2. **CORS:** Set `CORS_ORIGIN` / `CORS_ORIGINS` explicitly for browser clients.
+3. **`sync({ alter: true })`:** Convenient for iteration; for production many teams prefer migrations-only + controlled schema deploys.
+4. **Scale-out:** Multiple Node instances need a **Redis adapter** (or similar) for Socket.IO room consistency; this codebase assumes a single logical realtime instance unless you add that.
+5. **TLS:** Terminate HTTPS/WSS in front (reverse proxy or PaaS).
+6. **Legacy routes:** Restrict or remove `GET /api/auth/users` and in-memory `register` in locked-down environments.
+
+---
+
+## License
+
+ISC (see `package.json`).

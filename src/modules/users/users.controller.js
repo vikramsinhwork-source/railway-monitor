@@ -9,18 +9,13 @@ import User from './user.model.js';
 import UserFaceProfile from './userFaceProfile.model.js';
 import { logInfo, logWarn } from '../../utils/logger.js';
 import { toUserResponse, toUserResponses } from './userResponse.js';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import {
   putAvatarObject,
   deleteAvatarObject,
   isAvatarStorageConfigured,
 } from '../../services/s3Avatar.js';
-import {
-  isFaceEnrollmentConfigured,
-  collectionId,
-  countFacesInS3,
-  indexFaceFromS3,
-  deleteFacesFromCollection,
-} from '../../services/rekognitionFace.js';
+import { enrollFace, deleteFace, recognizeFace } from '../../services/rekognitionFace.js';
 import { normalizeRole } from '../../middleware/rbac.middleware.js';
 
 const USER_RESPONSE_ATTRIBUTES = [
@@ -450,200 +445,155 @@ export async function uploadUserAvatar(req, res) {
   }
 }
 
-async function cleanupEnrollmentS3(key) {
-  if (!key) return;
-  try {
-    await deleteAvatarObject(key);
-  } catch (_) {
-    /* best effort */
-  }
-}
-
-function rekognitionHttpStatus(err) {
-  const name = err && err.name;
-  if (name === 'ResourceNotFoundException') {
-    return { status: 503, message: 'Rekognition collection not found or not accessible' };
-  }
-  if (name === 'InvalidS3ObjectException' || name === 'InvalidImageFormatException') {
-    return { status: 400, message: 'Image could not be read for face detection' };
-  }
-  if (name === 'AccessDeniedException') {
-    return { status: 503, message: 'AWS denied access to S3 or Rekognition' };
-  }
-  return null;
-}
-
-export async function getMyFaceStatus(req, res) {
-  try {
-    const profile = await UserFaceProfile.findOne({
-      where: { user_id: req.auth.userId },
-    });
-    if (!profile) {
-      return res.json({
-        success: true,
-        status: 'none',
-        last_error: null,
-      });
-    }
-    return res.json({
-      success: true,
-      status: profile.status,
-      last_error: profile.last_error || null,
-    });
-  } catch (err) {
-    logWarn('Users', 'Face status error', { error: err.message });
-    return res.status(500).json({ success: false, message: 'Failed to load face enrollment status' });
-  }
-}
-
+// ── POST /api/users/me/face/enroll ──────────────────────────────────────────
 export async function enrollMyFace(req, res) {
   try {
-    if (!req.file || !req.file.buffer) {
-      return res.status(400).json({ success: false, message: 'Image file is required (field name: image)' });
-    }
-    const maxBytes = 5 * 1024 * 1024;
-    if (req.file.size > maxBytes) {
-      return res.status(400).json({ success: false, message: 'Image must be 5MB or smaller' });
-    }
-
-    if (!isAvatarStorageConfigured()) {
-      return res.status(503).json({
+    if (!req.file) {
+      return res.status(400).json({
         success: false,
-        message: 'Face enrollment requires S3 (AWS_S3_BUCKET and AWS_REGION)',
-      });
-    }
-    if (!isFaceEnrollmentConfigured()) {
-      return res.status(503).json({
-        success: false,
-        message: 'Face enrollment requires AWS_REKOGNITION_COLLECTION_ID (and S3)',
+        message: 'Image file is required. Send as multipart/form-data with field name "image".',
       });
     }
 
-    const user = await User.findByPk(req.auth.userId);
+    const userId = req.user.id ?? req.user.userId ?? req.auth.userId;
+    const imageBuffer = req.file.buffer;
+
+    if (!process.env.AWS_S3_BUCKET?.trim()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Face enrollment requires AWS_S3_BUCKET',
+      });
+    }
+    if (!process.env.AWS_REKOGNITION_COLLECTION_ID?.trim()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Face enrollment requires AWS_REKOGNITION_COLLECTION_ID',
+      });
+    }
+
+    const user = await User.findByPk(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const ext = extFromMime(req.file.mimetype);
-    if (!ext) {
-      return res.status(400).json({ success: false, message: 'Image must be JPEG, PNG, WebP, or GIF' });
+    // If user already has a face enrolled, remove the old one from Rekognition first
+    const existing = await UserFaceProfile.findOne({ where: { user_id: userId } });
+    if (existing?.rekognition_face_id) {
+      await deleteFace(existing.rekognition_face_id).catch((e) =>
+        console.warn('[Rekognition] Could not delete old face:', e.message)
+      );
     }
 
-    const bucket = process.env.AWS_S3_BUCKET;
-    const coll = collectionId();
-    const key = `face-enrollment/${user.id}/${crypto.randomUUID()}.${ext}`;
+    // Upload face image to S3 for audit/record keeping
+    const s3Key = `faces/${userId}_${Date.now()}.jpg`;
+    const s3 = new S3Client({
+      region: process.env.AWS_REGION,
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+      },
+    });
 
-    let profile = await UserFaceProfile.findOne({ where: { user_id: user.id } });
-    const previousFaceId = profile && profile.rekognition_face_id;
-    const previousS3Key = profile && profile.s3_key;
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.AWS_S3_BUCKET,
+      Key: s3Key,
+      Body: imageBuffer,
+      ContentType: req.file.mimetype || 'image/jpeg',
+    }));
 
-    if (!profile) {
-      profile = await UserFaceProfile.create({
-        user_id: user.id,
-        status: 'pending',
-        rekognition_face_id: null,
-        s3_key: null,
+    // Index face in AWS Rekognition
+    const { faceId, confidence } = await enrollFace(imageBuffer, userId);
+
+    // Save or update face profile in DB (schema: user_face_profiles)
+    if (existing) {
+      await existing.update({
+        rekognition_face_id: faceId,
+        s3_key: s3Key,
+        status: 'active',
         last_error: null,
       });
     } else {
-      await profile.update({ status: 'pending', last_error: null });
-    }
-
-    if (previousS3Key && previousS3Key !== key) {
-      await cleanupEnrollmentS3(previousS3Key);
-    }
-
-    try {
-      await putAvatarObject(key, req.file.buffer, req.file.mimetype);
-    } catch (e) {
-      logWarn('Users', 'Face enroll S3 upload failed', { error: e.message });
-      await profile.update({
-        status: 'failed',
-        s3_key: null,
-        last_error: 'Failed to upload image',
-      });
-      return res.status(502).json({ success: false, message: 'Failed to upload image' });
-    }
-
-    await profile.update({ s3_key: key });
-
-    try {
-      const faceCount = await countFacesInS3(bucket, key);
-      if (faceCount === 0) {
-        await cleanupEnrollmentS3(key);
-        await profile.update({
-          status: 'failed',
-          s3_key: null,
-          last_error: 'No face detected in image',
-        });
-        return res.status(400).json({
-          success: false,
-          message: 'No face detected. Use a clear photo with your face visible.',
-        });
-      }
-      if (faceCount > 1) {
-        await cleanupEnrollmentS3(key);
-        await profile.update({
-          status: 'failed',
-          s3_key: null,
-          last_error: 'Multiple faces detected',
-        });
-        return res.status(400).json({
-          success: false,
-          message: 'Multiple faces detected. Use a photo with only one face.',
-        });
-      }
-
-      if (previousFaceId) {
-        try {
-          await deleteFacesFromCollection(coll, [previousFaceId]);
-        } catch (delErr) {
-          logWarn('Users', 'Rekognition delete old face failed (continuing)', { error: delErr.message });
-        }
-      }
-
-      const { faceId } = await indexFaceFromS3(coll, bucket, key, user.id);
-
-      await cleanupEnrollmentS3(key);
-      await profile.update({
-        status: 'active',
+      await UserFaceProfile.create({
+        user_id: userId,
         rekognition_face_id: faceId,
-        s3_key: null,
+        s3_key: s3Key,
+        status: 'active',
         last_error: null,
       });
-
-      logInfo('Users', 'Face enrolled', { user_id: user.user_id });
-      return res.json({
-        success: true,
-        status: 'active',
-        message: 'Face enrolled successfully',
-      });
-    } catch (err) {
-      await cleanupEnrollmentS3(key);
-      const mapped = rekognitionHttpStatus(err);
-      const message = mapped
-        ? mapped.message
-        : err.code === 'NO_INDEXED_FACE'
-          ? 'Face could not be indexed (quality or pose). Try another photo.'
-          : err.message || 'Face enrollment failed';
-
-      await profile.update({
-        status: 'failed',
-        s3_key: null,
-        last_error: message,
-      });
-
-      if (mapped) {
-        return res.status(mapped.status).json({ success: false, message });
-      }
-      if (err.code === 'NO_INDEXED_FACE' || err.code === 'NO_FACE_ID') {
-        return res.status(400).json({ success: false, message });
-      }
-      logWarn('Users', 'Face enroll error', { error: err.message, name: err.name });
-      return res.status(502).json({ success: false, message: 'Face enrollment failed' });
     }
+
+    logInfo('Users', 'Face enrolled', { user_id: user.user_id });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Face enrolled successfully.',
+      data: {
+        faceId,
+        confidence: parseFloat(Number(confidence).toFixed(2)),
+        enrolledAt: new Date().toISOString(),
+      },
+    });
   } catch (err) {
-    logWarn('Users', 'Face enroll unexpected error', { error: err.message });
-    return res.status(500).json({ success: false, message: 'Face enrollment failed' });
+    console.error('[enrollMyFace] Error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+// ── GET /api/users/me/face/status ───────────────────────────────────────────
+export async function getMyFaceStatus(req, res) {
+  try {
+    const userId = req.user.id ?? req.user.userId ?? req.auth.userId;
+    const profile = await UserFaceProfile.findOne({ where: { user_id: userId } });
+
+    const active = profile?.status === 'active';
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        enrolled: active,
+        enrolledAt: active ? (profile.updatedAt ? profile.updatedAt.toISOString() : null) : null,
+        isActive: active,
+      },
+    });
+  } catch (err) {
+    console.error('[getMyFaceStatus] Error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+// ── POST /api/face/recognize (internal / monitor use) ───────────────────────
+export async function recognizeFaceFromFrame(req, res) {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'Image file is required.' });
+    }
+
+    const result = await recognizeFace(req.file.buffer);
+
+    if (!result.matched) {
+      return res.status(200).json({
+        success: true,
+        matched: false,
+        reason: result.reason ?? 'No match found in collection.',
+      });
+    }
+
+    const topUserId = result.topMatch.userId;
+    const user = await User.findByPk(topUserId, {
+      attributes: ['id', 'name', 'user_id', 'role', 'division_id'],
+    });
+
+    return res.status(200).json({
+      success: true,
+      matched: true,
+      topMatch: {
+        ...result.topMatch,
+        user: user ?? null,
+      },
+      allMatches: result.matches,
+    });
+  } catch (err) {
+    console.error('[recognizeFaceFromFrame] Error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
   }
 }

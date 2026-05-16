@@ -132,20 +132,32 @@ const options = {
           type: 'object',
           properties: {
             success: { type: 'boolean' },
-            status: {
-              type: 'string',
-              enum: ['none', 'pending', 'active', 'failed'],
-              description: 'none = no enrollment record; otherwise DB status',
+            data: {
+              type: 'object',
+              properties: {
+                enrolled: {
+                  type: 'boolean',
+                  description: 'True when a face profile exists and status is active',
+                },
+                enrolledAt: { type: 'string', format: 'date-time', nullable: true },
+                isActive: { type: 'boolean' },
+              },
             },
-            last_error: { type: 'string', nullable: true },
           },
         },
         FaceEnrollSuccessResponse: {
           type: 'object',
           properties: {
             success: { type: 'boolean' },
-            status: { type: 'string', example: 'active' },
             message: { type: 'string' },
+            data: {
+              type: 'object',
+              properties: {
+                faceId: { type: 'string' },
+                confidence: { type: 'number', description: 'Rekognition detection confidence' },
+                enrolledAt: { type: 'string', format: 'date-time' },
+              },
+            },
           },
         },
         FormQuestion: {
@@ -527,7 +539,8 @@ spec.paths['/api/users/me/face/status'] = {
   get: {
     tags: ['Users'],
     summary: 'Face enrollment status (current user)',
-    description: 'USER role only. Returns none until an enrollment row exists; then pending, active, or failed.',
+    description:
+      'USER role only. Returns whether an active enrollment exists (`data.enrolled` / `data.isActive`) and last update time when active.',
     security: [{ bearerAuth: [] }],
     responses: {
       200: {
@@ -548,7 +561,7 @@ spec.paths['/api/users/me/face/enroll'] = {
     tags: ['Users'],
     summary: 'Enroll face reference (current user)',
     description:
-      'USER role only. multipart/form-data field **image** (JPEG, PNG, WebP, or GIF, max 5MB). Uploads to S3, detects a single face, indexes into AWS Rekognition collection (AWS_REKOGNITION_COLLECTION_ID). Reference image is removed from S3 after successful indexing.',
+      'USER role only. multipart/form-data field **image** (JPEG, PNG, WebP, or GIF, max 5MB). Uploads to S3 under `faces/`, indexes image bytes into AWS Rekognition (`AWS_REKOGNITION_COLLECTION_ID`), stores FaceId and S3 key on the user profile.',
     security: [{ bearerAuth: [] }],
     requestBody: {
       required: true,
@@ -573,12 +586,97 @@ spec.paths['/api/users/me/face/enroll'] = {
           },
         },
       },
-      400: { description: 'No face, multiple faces, or invalid image', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      400: { description: 'Missing file or no face in image', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'USER role required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       404: { description: 'User not found', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      502: { description: 'Upload or Rekognition error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
-      503: { description: 'S3 or Rekognition collection not configured', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      500: { description: 'S3, Rekognition, or server error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      503: { description: 'S3 bucket or Rekognition collection not configured', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/face/recognize'] = {
+  post: {
+    tags: ['Face'],
+    summary: 'Recognize face from camera frame (monitor)',
+    description:
+      'MONITOR role or higher. multipart/form-data field **image**. SearchFacesByImage against the Rekognition collection; returns best DB user match when similarity exceeds threshold.',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'multipart/form-data': {
+          schema: {
+            type: 'object',
+            required: ['image'],
+            properties: {
+              image: { type: 'string', format: 'binary' },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Match result (matched may be false with 200)',
+        content: {
+          'application/json': {
+            schema: {
+              oneOf: [
+                {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    matched: { type: 'boolean', enum: [false] },
+                    reason: { type: 'string' },
+                  },
+                },
+                {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean' },
+                    matched: { type: 'boolean', enum: [true] },
+                    topMatch: {
+                      type: 'object',
+                      properties: {
+                        userId: { type: 'string' },
+                        faceId: { type: 'string' },
+                        confidence: { type: 'number' },
+                        user: {
+                          type: 'object',
+                          nullable: true,
+                          properties: {
+                            id: { type: 'string', format: 'uuid' },
+                            name: { type: 'string' },
+                            user_id: { type: 'string' },
+                            role: { type: 'string' },
+                            division_id: { type: 'string', format: 'uuid', nullable: true },
+                          },
+                        },
+                      },
+                    },
+                    allMatches: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          userId: { type: 'string' },
+                          faceId: { type: 'string' },
+                          confidence: { type: 'number' },
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+      400: { description: 'Missing image', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Monitor access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      500: { description: 'Server or Rekognition error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };

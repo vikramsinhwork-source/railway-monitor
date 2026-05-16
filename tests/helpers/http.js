@@ -29,7 +29,7 @@ export async function login(user_id, password) {
   return response.data;
 }
 
-export async function deviceToken(deviceId, role, secret = process.env.DEVICE_TOKEN_SECRET || 'device-token-secret-change-in-production') {
+export async function deviceToken(deviceId, role, secret = process.env.DEVICE_TOKEN_SECRET || 'change-this-device-token-secret') {
   const response = await rest('/api/auth/device-token', {
     method: 'POST',
     body: JSON.stringify({ deviceId, role, secret }),

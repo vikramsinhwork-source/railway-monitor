@@ -17,7 +17,7 @@ async function restJson(path, options = {}) {
   return { status: res.status, data };
 }
 
-test('GET /api/users/me/face/status — USER: none when not enrolled', async () => {
+test('GET /api/users/me/face/status — USER: not enrolled when no active profile', async () => {
   const user_id = `face_user_${Date.now()}`;
   const signup = await restJson('/api/auth/signup', {
     method: 'POST',
@@ -35,8 +35,10 @@ test('GET /api/users/me/face/status — USER: none when not enrolled', async () 
   });
   assert.strictEqual(status.status, 200, JSON.stringify(status.data));
   assert.strictEqual(status.data.success, true);
-  assert.strictEqual(status.data.status, 'none');
-  assert.strictEqual(status.data.last_error, null);
+  assert.ok(status.data.data);
+  assert.strictEqual(status.data.data.enrolled, false);
+  assert.strictEqual(status.data.data.enrolledAt, null);
+  assert.strictEqual(status.data.data.isActive, false);
 });
 
 test('GET /api/users/me/face/status — ADMIN receives 403', async () => {
@@ -53,12 +55,13 @@ test('GET /api/users/me/face/status — ADMIN receives 403', async () => {
   assert.strictEqual(status.data.success, false);
 });
 
-test('POST /api/users/me/face/enroll — 503 when Rekognition/S3 not fully configured', async () => {
+test('POST /api/users/me/face/enroll — 503 when Rekognition/S3 not fully configured', async (t) => {
   if (
     process.env.AWS_S3_BUCKET &&
     process.env.AWS_REGION &&
     (process.env.AWS_REKOGNITION_COLLECTION_ID || '').trim()
   ) {
+    t.skip('AWS face enrollment is configured on this server');
     return;
   }
 
