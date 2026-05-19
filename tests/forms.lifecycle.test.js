@@ -3,7 +3,7 @@ import assert from 'node:assert';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const DEFAULT_STAFF_TYPE = 'ALP';
-const DEFAULT_DUTY_TYPE = 'SIGN_IN';
+const DEFAULT_DUTY_TYPE = 'SIGN_ON';
 
 async function rest(path, options = {}) {
   const url = `${BASE_URL}${path}`;
@@ -17,6 +17,20 @@ async function rest(path, options = {}) {
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   return { status: res.status, data };
+}
+
+/** For endpoints that return binary (e.g. XLSX); does not JSON-parse the body. */
+async function restBinary(path, options = {}) {
+  const url = `${BASE_URL}${path}`;
+  const { headers: optHeaders, ...fetchOpts } = options;
+  const headers = { ...(optHeaders || {}) };
+  if (fetchOpts.body != null && headers['Content-Type'] === undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(url, { ...fetchOpts, headers });
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const contentType = res.headers.get('content-type') || '';
+  return { status: res.status, buffer, contentType };
 }
 
 async function login(userId, password) {
@@ -87,6 +101,35 @@ async function getTodayQuestionIds(userToken, { staffType = DEFAULT_STAFF_TYPE, 
   return todayQuestions.data.questions.map((q) => q.id);
 }
 
+/** Adds a question to the active template for this staff+duty (not the legacy /forms/questions form, which may be a different duty). */
+async function addQuestionToActiveDutyTemplate(adminToken, staffType, dutyType, payload) {
+  const templates = await rest(
+    `/api/forms/templates?staffType=${staffType}&dutyType=${dutyType}&isActive=true`,
+    { headers: { Authorization: `Bearer ${adminToken}` } },
+  );
+  assert.strictEqual(templates.status, 200, JSON.stringify(templates.data));
+  const templateId = templates.data.templates?.[0]?.id;
+  assert.ok(templateId, `Expected an active ${staffType} ${dutyType} template`);
+  return addTemplateQuestion(adminToken, templateId, payload);
+}
+
+/** First staff+duty pair in the list with no active form (404 on /today), for DBs that already publish many duty types. */
+async function findContextWithNoActiveForm(userToken) {
+  const pairs = [
+    ['TM', 'SIGN_OFF'],
+    ['LP', 'SIGN_OFF'],
+    ['TM', 'SIGN_ON'],
+    ['LP', 'SIGN_ON'],
+  ];
+  for (const [staffType, dutyType] of pairs) {
+    const r = await rest(`/api/forms/today?staffType=${staffType}&dutyType=${dutyType}`, {
+      headers: { Authorization: `Bearer ${userToken}` },
+    });
+    if (r.status === 404) return { staffType, dutyType };
+  }
+  return null;
+}
+
 test('Forms auth and role guards', async () => {
   const { adminToken, userToken } = await setupAdminAndUser();
 
@@ -107,6 +150,16 @@ test('Forms auth and role guards', async () => {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   assert.strictEqual(userCannotViewAnalytics.status, 403);
+
+  const userCannotViewSummary = await rest('/api/forms/analytics/summary', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(userCannotViewSummary.status, 403);
+
+  const userCannotExportAnalytics = await rest('/api/forms/analytics/export', {
+    headers: { Authorization: `Bearer ${userToken}` },
+  });
+  assert.strictEqual(userCannotExportAnalytics.status, 403);
 });
 
 test('Forms admin template lifecycle and template-scoped questions', async () => {
@@ -115,15 +168,15 @@ test('Forms admin template lifecycle and template-scoped questions', async () =>
   const invalidTemplate = await createTemplate(adminToken, {
     title: '',
     staffType: 'ALP',
-    dutyType: 'SIGN_IN',
+    dutyType: 'SIGN_ON',
   });
   assert.strictEqual(invalidTemplate.status, 400);
 
   const firstTemplate = await createTemplate(adminToken, {
-    title: `ALP sign-in draft ${Date.now()}`,
-    description: 'Draft template for ALP sign-in',
+    title: `ALP SIGN ON draft ${Date.now()}`,
+    description: 'Draft template for ALP SIGN ON',
     staffType: 'ALP',
-    dutyType: 'SIGN_IN',
+    dutyType: 'SIGN_ON',
   });
   assert.strictEqual(firstTemplate.status, 201, JSON.stringify(firstTemplate.data));
   const firstTemplateId = firstTemplate.data.template.id;
@@ -159,9 +212,9 @@ test('Forms admin template lifecycle and template-scoped questions', async () =>
   assert.strictEqual(publishFirstTemplate.data.template.is_active, true);
 
   const secondTemplate = await createTemplate(adminToken, {
-    title: `ALP sign-in v2 ${Date.now()}`,
+    title: `ALP SIGN ON v2 ${Date.now()}`,
     staffType: 'ALP',
-    dutyType: 'SIGN_IN',
+    dutyType: 'SIGN_ON',
   });
   assert.strictEqual(secondTemplate.status, 201, JSON.stringify(secondTemplate.data));
   const secondTemplateId = secondTemplate.data.template.id;
@@ -173,7 +226,7 @@ test('Forms admin template lifecycle and template-scoped questions', async () =>
   assert.strictEqual(publishSecondTemplate.status, 200);
   assert.strictEqual(publishSecondTemplate.data.template.is_active, true);
 
-  const activeTemplates = await rest('/api/forms/templates?staffType=ALP&dutyType=SIGN_IN&isActive=true', {
+  const activeTemplates = await rest('/api/forms/templates?staffType=ALP&dutyType=SIGN_ON&isActive=true', {
     headers: { Authorization: `Bearer ${adminToken}` },
   });
   assert.strictEqual(activeTemplates.status, 200);
@@ -283,7 +336,7 @@ test('Forms question CRUD validations and edge cases', async () => {
 test('Forms user submissions allow multiple per day and latest endpoint works', async () => {
   const { adminToken, userToken } = await setupAdminAndUser();
 
-  const createRequired = await createQuestion(adminToken, {
+  const createRequired = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
     prompt: 'Main update',
     is_required: true,
     sort_order: 0,
@@ -291,7 +344,7 @@ test('Forms user submissions allow multiple per day and latest endpoint works', 
   assert.strictEqual(createRequired.status, 201);
   const requiredQuestionId = createRequired.data.question.id;
 
-  const createOptional = await createQuestion(adminToken, {
+  const createOptional = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
     prompt: 'Optional note',
     is_required: false,
     sort_order: 1,
@@ -407,15 +460,15 @@ test('Forms user submissions allow multiple per day and latest endpoint works', 
 test('Forms role+duty filtering, required validation, and missing-template handling', async () => {
   const { adminToken, userToken } = await setupAdminAndUser();
 
-  const activeSignInTemplates = await rest('/api/forms/templates?staffType=ALP&dutyType=SIGN_IN&isActive=true', {
+  const activeSignInTemplates = await rest('/api/forms/templates?staffType=ALP&dutyType=SIGN_ON&isActive=true', {
     headers: { Authorization: `Bearer ${adminToken}` },
   });
   assert.strictEqual(activeSignInTemplates.status, 200, JSON.stringify(activeSignInTemplates.data));
   const signInTemplateId = activeSignInTemplates.data.templates?.[0]?.id;
-  assert.ok(signInTemplateId, 'Expected an active ALP SIGN_IN template');
+  assert.ok(signInTemplateId, 'Expected an active ALP SIGN_ON duty template');
 
   const signInRequired = await addTemplateQuestion(adminToken, signInTemplateId, {
-    prompt: 'ALP sign-in required prompt',
+    prompt: 'ALP SIGN ON required prompt',
     is_required: true,
     sort_order: 0,
   });
@@ -423,7 +476,7 @@ test('Forms role+duty filtering, required validation, and missing-template handl
   const signInRequiredQuestionId = signInRequired.data.question.id;
 
   const signInOptional = await addTemplateQuestion(adminToken, signInTemplateId, {
-    prompt: 'ALP sign-in optional prompt',
+    prompt: 'ALP SIGN ON optional prompt',
     is_required: false,
     sort_order: 1,
   });
@@ -446,7 +499,7 @@ test('Forms role+duty filtering, required validation, and missing-template handl
   assert.strictEqual(signOffRequired.status, 201, JSON.stringify(signOffRequired.data));
   const signOffRequiredQuestionId = signOffRequired.data.question.id;
 
-  const todaySignIn = await rest('/api/forms/today?staffType=ALP&dutyType=SIGN_IN', {
+  const todaySignIn = await rest('/api/forms/today?staffType=ALP&dutyType=SIGN_ON', {
     headers: { Authorization: `Bearer ${userToken}` },
   });
   assert.strictEqual(todaySignIn.status, 200, JSON.stringify(todaySignIn.data));
@@ -455,19 +508,28 @@ test('Forms role+duty filtering, required validation, and missing-template handl
   assert.ok(todaySignInIds.includes(signInOptionalQuestionId));
   assert.ok(!todaySignInIds.includes(signOffRequiredQuestionId));
 
-  const todaySignOff = await rest('/api/forms/today?staffType=ALP&dutyType=SIGN_OFF', {
-    headers: { Authorization: `Bearer ${userToken}` },
-  });
-  assert.strictEqual(todaySignOff.status, 404, JSON.stringify(todaySignOff.data));
-  assert.match(todaySignOff.data.message, /No active form found/i);
+  const noFormCtx = await findContextWithNoActiveForm(userToken);
+  assert.ok(
+    noFormCtx,
+    'Tests need at least one staff+duty with no active published form (e.g. TM+SIGN_OFF). Unpublish extra templates or use a DB without full seed.',
+  );
+
+  const todayNoForm = await rest(
+    `/api/forms/today?staffType=${noFormCtx.staffType}&dutyType=${noFormCtx.dutyType}`,
+    {
+      headers: { Authorization: `Bearer ${userToken}` },
+    },
+  );
+  assert.strictEqual(todayNoForm.status, 404, JSON.stringify(todayNoForm.data));
+  assert.match(todayNoForm.data.message, /No active form found/i);
 
   const missingSignInRequired = await rest('/api/forms/submissions/today', {
     method: 'POST',
     headers: { Authorization: `Bearer ${userToken}` },
     body: JSON.stringify({
       staffType: 'ALP',
-      dutyType: 'SIGN_IN',
-      answers: [{ question_id: signInOptionalQuestionId, answer_text: 'Only optional for sign-in' }],
+      dutyType: 'SIGN_ON',
+      answers: [{ question_id: signInOptionalQuestionId, answer_text: 'Only optional for SIGN ON' }],
     }),
   });
   assert.strictEqual(missingSignInRequired.status, 400, JSON.stringify(missingSignInRequired.data));
@@ -479,8 +541,8 @@ test('Forms role+duty filtering, required validation, and missing-template handl
     method: 'POST',
     headers: { Authorization: `Bearer ${userToken}` },
     body: JSON.stringify({
-      staffType: 'ALP',
-      dutyType: 'SIGN_OFF',
+      staffType: noFormCtx.staffType,
+      dutyType: noFormCtx.dutyType,
       answers: [{ question_id: signInRequiredQuestionId, answer_text: 'Should fail without template' }],
     }),
   });
@@ -491,7 +553,7 @@ test('Forms role+duty filtering, required validation, and missing-template handl
 test('Forms analytics endpoints: filters, pagination, and validation errors', async () => {
   const { adminToken, userToken, userId, testUserId } = await setupAdminAndUser();
 
-  const createRequired = await createQuestion(adminToken, {
+  const createRequired = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
     prompt: `Daily update ${Date.now()}`,
     is_required: true,
     sort_order: 0,
@@ -590,6 +652,193 @@ test('Forms analytics endpoints: filters, pagination, and validation errors', as
   assert.strictEqual(invalidHistoryDate.status, 400);
 });
 
+test('Forms analytics summary: aggregates, validation, and reconciliation', async () => {
+  const { adminToken, userToken } = await setupAdminAndUser();
+
+  const badFrom = await rest('/api/forms/analytics/summary?from_date=2026/01/01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badFrom.status, 400);
+
+  const badRange = await rest('/api/forms/analytics/summary?from_date=2026-12-31&to_date=2026-01-01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badRange.status, 400);
+
+  const allTime = await rest('/api/forms/analytics/summary', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(allTime.status, 200);
+  assert.strictEqual(allTime.data.success, true);
+  assert.ok(Number.isInteger(allTime.data.totals.submission_count));
+  assert.ok(Number.isInteger(allTime.data.totals.distinct_user_count));
+  assert.ok(Array.isArray(allTime.data.by_staff_duty));
+  assert.ok('meta' in allTime.data);
+  assert.ok(Number.isInteger(allTime.data.meta.days_with_submissions));
+  assert.ok(Array.isArray(allTime.data.submissions_by_date));
+  assert.ok(Array.isArray(allTime.data.by_staff_duty_by_date));
+  assert.ok(Array.isArray(allTime.data.by_form));
+  assert.ok(allTime.data.participation);
+  assert.ok(Number.isInteger(allTime.data.participation.active_roster_user_count));
+  assert.ok(Number.isInteger(allTime.data.participation.active_users_with_submission_count));
+  const sumAllTime = allTime.data.by_staff_duty.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumAllTime, allTime.data.totals.submission_count);
+  const sumByDay = allTime.data.submissions_by_date.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumByDay, allTime.data.totals.submission_count);
+  const sumByForm = allTime.data.by_form.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumByForm, allTime.data.totals.submission_count);
+  const sumSeries = allTime.data.by_staff_duty_by_date.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumSeries, allTime.data.totals.submission_count);
+
+  const createRequired = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
+    prompt: `Summary rollup ${Date.now()}`,
+    is_required: true,
+    sort_order: 0,
+  });
+  assert.strictEqual(createRequired.status, 201);
+  const requiredQuestionId = createRequired.data.question.id;
+
+  const allQuestionIds = await getTodayQuestionIds(userToken);
+  const submitToday = await rest('/api/forms/submissions/today', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({
+      staffType: DEFAULT_STAFF_TYPE,
+      dutyType: DEFAULT_DUTY_TYPE,
+      answers: allQuestionIds.map((qid) => ({
+        question_id: qid,
+        answer_text: qid === requiredQuestionId ? 'Summary endpoint test' : 'Other',
+      })),
+    }),
+  });
+  assert.strictEqual(submitToday.status, 201, JSON.stringify(submitToday.data));
+
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const windowed = await rest(
+    `/api/forms/analytics/summary?from_date=${encodeURIComponent(today)}&to_date=${encodeURIComponent(today)}`,
+    { headers: { Authorization: `Bearer ${adminToken}` } },
+  );
+  assert.strictEqual(windowed.status, 200);
+  assert.strictEqual(windowed.data.filters.from_date, today);
+  assert.strictEqual(windowed.data.filters.to_date, today);
+  const sumWindow = windowed.data.by_staff_duty.reduce((acc, row) => acc + row.submission_count, 0);
+  assert.strictEqual(sumWindow, windowed.data.totals.submission_count);
+  assert.ok(windowed.data.totals.submission_count >= 1);
+
+  const entry = windowed.data.by_staff_duty.find(
+    (r) => r.staff_type === DEFAULT_STAFF_TYPE && r.duty_type === DEFAULT_DUTY_TYPE,
+  );
+  assert.ok(entry, 'Expected a breakdown row for default staff+duty after submit');
+  assert.ok(entry.submission_count >= 1);
+  assert.ok(entry.distinct_user_count >= 1);
+
+  const todayRow = windowed.data.submissions_by_date.find((r) => r.submission_date === today);
+  assert.ok(todayRow);
+  assert.ok(todayRow.submission_count >= 1);
+  const formRow = windowed.data.by_form.find((r) => r.staff_type === DEFAULT_STAFF_TYPE && r.duty_type === DEFAULT_DUTY_TYPE);
+  assert.ok(formRow);
+  assert.ok(formRow.form_id);
+  assert.ok(typeof formRow.is_active === 'boolean');
+});
+
+test('Forms analytics export XLSX: admin download, Content-Type, magic bytes, and filter validation parity', async () => {
+  const { adminToken } = await setupAdminAndUser();
+
+  const adminExport = await restBinary('/api/forms/analytics/export', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(adminExport.status, 200);
+  assert.ok(
+    adminExport.contentType.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    `unexpected Content-Type: ${adminExport.contentType}`,
+  );
+  assert.strictEqual(adminExport.buffer[0], 0x50);
+  assert.strictEqual(adminExport.buffer[1], 0x4b);
+
+  const badFromDate = await rest('/api/forms/analytics/export?from_date=2026/01/01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badFromDate.status, 400);
+  assert.strictEqual(badFromDate.data.message, 'from_date and to_date must be in YYYY-MM-DD format');
+
+  const badDateRange = await rest('/api/forms/analytics/export?from_date=2026-12-31&to_date=2026-01-01', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badDateRange.status, 400);
+  assert.strictEqual(badDateRange.data.message, 'from_date cannot be after to_date');
+
+  const badStatus = await rest('/api/forms/analytics/export?status=BAD', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(badStatus.status, 400);
+  assert.strictEqual(badStatus.data.message, 'status must be ACTIVE or INACTIVE');
+
+  const staffOnly = await rest('/api/forms/analytics/export?staffType=ALP', {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  assert.strictEqual(staffOnly.status, 400);
+  assert.match(staffOnly.data.message, /dutyType is required/);
+});
+
+test('Forms analytics export preview JSON: all sheets with full rows', async () => {
+  const { adminToken, userToken, testUserId } = await setupAdminAndUser();
+
+  const createRequired = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
+    prompt: `Preview export question ${Date.now()}`,
+    is_required: true,
+    sort_order: 0,
+  });
+  assert.strictEqual(createRequired.status, 201, JSON.stringify(createRequired.data));
+
+  const allQuestionIds = await getTodayQuestionIds(userToken);
+  const submitToday = await rest('/api/forms/submissions/today', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${userToken}` },
+    body: JSON.stringify({
+      staffType: DEFAULT_STAFF_TYPE,
+      dutyType: DEFAULT_DUTY_TYPE,
+      answers: allQuestionIds.map((questionId, index) => ({
+        question_id: questionId,
+        answer_text: index === 0 ? 'Preview export answer' : `Preview filler ${index}`,
+      })),
+    }),
+  });
+  assert.strictEqual(submitToday.status, 201, JSON.stringify(submitToday.data));
+
+  const preview = await rest(
+    `/api/forms/analytics/export/preview?staffType=${DEFAULT_STAFF_TYPE}&dutyType=${DEFAULT_DUTY_TYPE}&search=${encodeURIComponent(testUserId)}&sheetKey=${DEFAULT_STAFF_TYPE}__${DEFAULT_DUTY_TYPE}&page=1&limit=10`,
+    { headers: { Authorization: `Bearer ${adminToken}` } },
+  );
+  assert.strictEqual(preview.status, 200, JSON.stringify(preview.data));
+  assert.strictEqual(preview.data.success, true);
+  assert.ok(Array.isArray(preview.data.workbook.sheets));
+  assert.ok(preview.data.workbook.sheets.length >= 2);
+  assert.ok(preview.data.workbook.sheets.some((sheet) => sheet.key === 'export_info'));
+  assert.ok(
+    preview.data.workbook.sheets.some((sheet) => sheet.key === `${DEFAULT_STAFF_TYPE}__${DEFAULT_DUTY_TYPE}`),
+  );
+  assert.ok(preview.data.meta);
+  assert.strictEqual(preview.data.meta.mode, 'all_sheets_full');
+  assert.ok(Array.isArray(preview.data.meta.deprecated_query_params_ignored));
+  assert.ok(preview.data.meta.deprecated_query_params_ignored.includes('sheetKey'));
+
+  const nonInfoSheets = preview.data.workbook.sheets.filter((sheet) => sheet.key !== 'export_info');
+  assert.ok(nonInfoSheets.length >= 1);
+  for (const sheet of nonInfoSheets) {
+    assert.ok(Array.isArray(sheet.columns));
+    assert.ok(Array.isArray(sheet.rows));
+    assert.ok(sheet.columns.length >= 1);
+  }
+
+  const targetSheet = preview.data.workbook.sheets.find(
+    (sheet) => sheet.key === `${DEFAULT_STAFF_TYPE}__${DEFAULT_DUTY_TYPE}`,
+  );
+  assert.ok(targetSheet);
+  assert.ok(Array.isArray(targetSheet.rows));
+  assert.ok(targetSheet.rows.some((row) => row.user_id === testUserId));
+});
+
 test('GET /api/forms/submissions/me: scoped history, pagination, role guards', async () => {
   const { adminToken, userToken, userId, testUserId } = await setupAdminAndUser();
 
@@ -611,7 +860,7 @@ test('GET /api/forms/submissions/me: scoped history, pagination, role guards', a
   assert.strictEqual(emptyHistory.data.history.length, 0);
   assert.strictEqual(emptyHistory.data.pagination.total, 0);
 
-  const createRequired = await createQuestion(adminToken, {
+  const createRequired = await addQuestionToActiveDutyTemplate(adminToken, DEFAULT_STAFF_TYPE, DEFAULT_DUTY_TYPE, {
     prompt: `Me history ${Date.now()}`,
     is_required: true,
     sort_order: 0,

@@ -197,7 +197,7 @@ const options = {
             title: { type: 'string' },
             description: { type: 'string', nullable: true },
             staff_type: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-            duty_type: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+            duty_type: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
             is_active: { type: 'boolean' },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
@@ -210,7 +210,7 @@ const options = {
             title: { type: 'string' },
             description: { type: 'string', nullable: true },
             staffType: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-            dutyType: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+            dutyType: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
           },
         },
         TodayAnswerItem: {
@@ -226,7 +226,7 @@ const options = {
           required: ['staffType', 'dutyType', 'answers'],
           properties: {
             staffType: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-            dutyType: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+            dutyType: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
             answers: {
               type: 'array',
               items: { $ref: '#/components/schemas/TodayAnswerItem' },
@@ -244,7 +244,7 @@ const options = {
                 title: { type: 'string' },
                 description: { type: 'string', nullable: true },
                 staff_type: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
-                duty_type: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] },
+                duty_type: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
               },
             },
             questions: {
@@ -847,7 +847,7 @@ spec.paths['/api/forms/templates'] = {
     security: [{ bearerAuth: [] }],
     parameters: [
       { name: 'staffType', in: 'query', schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] } },
-      { name: 'dutyType', in: 'query', schema: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] } },
+      { name: 'dutyType', in: 'query', schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] } },
       { name: 'isActive', in: 'query', schema: { type: 'boolean' } },
     ],
     responses: {
@@ -960,7 +960,7 @@ spec.paths['/api/forms/today'] = {
     security: [{ bearerAuth: [] }],
     parameters: [
       { name: 'staffType', in: 'query', required: true, schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] } },
-      { name: 'dutyType', in: 'query', required: true, schema: { type: 'string', enum: ['SIGN_IN', 'SIGN_OFF'] } },
+      { name: 'dutyType', in: 'query', required: true, schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] } },
     ],
     responses: {
       200: {
@@ -1052,6 +1052,118 @@ spec.paths['/api/forms/submissions/me/latest'] = {
       200: { description: 'Latest submission (or null)' },
       401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       403: { description: 'User access required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/forms/analytics/summary'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Rich submission analytics for dashboards (Admin only)',
+    description:
+      'Aggregates over submissions joined to forms. Optional from_date/to_date (YYYY-MM-DD); omitted bounds behave like other analytics (all-time when both omitted). Response includes: totals; by_staff_duty; submissions_by_date (daily volume); by_staff_duty_by_date (stacked/multi-series charts); by_form (per template row including inactive versions); participation (ACTIVE USER roster vs distinct active users who submitted in the filter window); meta (first/last submission_date in window, day count).',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+    ],
+    responses: {
+      200: {
+        description:
+          'Dashboard payload: totals, by_staff_duty, submissions_by_date, by_staff_duty_by_date, by_form, participation, meta',
+      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/forms/analytics/export/preview'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Preview form analytics export as sheet JSON (Admin only)',
+    description:
+      'Returns a workbook-like JSON payload for rendering the XLSX export inside Flutter. Response includes workbook metadata and full row data for all sheets in one response. Query filters mirror `/api/forms/analytics/export`. Legacy preview controls `sheetKey`, `page`, and `limit` are accepted but ignored.',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+      { name: 'q', in: 'query', schema: { type: 'string' } },
+      { name: 'status', in: 'query', schema: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] } },
+      {
+        name: 'staffType',
+        in: 'query',
+        schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+      {
+        name: 'dutyType',
+        in: 'query',
+        schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+      {
+        name: 'sheetKey',
+        in: 'query',
+        schema: { type: 'string' },
+        description: 'Deprecated for all-sheets mode. Accepted but ignored.',
+      },
+      { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1, default: 1 }, description: 'Deprecated for all-sheets mode. Accepted but ignored.' },
+      { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 500, default: 100 }, description: 'Deprecated for all-sheets mode. Accepted but ignored.' },
+    ],
+    responses: {
+      200: { description: 'Workbook metadata plus full columns/rows for every sheet' },
+      400: { description: 'Validation error or preview row cap exceeded', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/forms/analytics/export'] = {
+  get: {
+    tags: ['Forms Analytics'],
+    summary: 'Export form analytics as XLSX (Admin only)',
+    description:
+      'Downloads an Excel workbook with worksheets: **Export info** (generation timestamp, document title, and applied filters), **Users** (one row per USER roster member matching filters, with in-range submission counts and first/last dates), and **Fills** (one row per answer, with user columns repeated; submissions without answers still produce one row). Workbook metadata (title, author, last modified) is set for Excel file properties. Query filters match `GET /api/forms/analytics/users` and date semantics match `GET /api/forms/analytics/summary` (no `page` or `limit`). Returns `Content-Disposition: attachment` with a filename that includes the date range and an export timestamp. If `FORMS_EXPORT_MAX_ROWS` is set and the Fills row count would exceed it, responds with 400 JSON.',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+      { name: 'q', in: 'query', schema: { type: 'string' } },
+      { name: 'status', in: 'query', schema: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] } },
+      {
+        name: 'staffType',
+        in: 'query',
+        schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+      {
+        name: 'dutyType',
+        in: 'query',
+        schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
+        description: 'If `staffType` or `dutyType` is sent, both are required.',
+      },
+    ],
+    responses: {
+      200: {
+        description: 'XLSX binary (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`)',
+        content: {
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+            schema: { type: 'string', format: 'binary' },
+          },
+        },
+        headers: {
+          'Content-Disposition': {
+            schema: { type: 'string' },
+            description:
+              'attachment; filename includes date range and export time (e.g. form-submissions-all-2026-04-04-143052.xlsx)',
+          },
+        },
+      },
+      400: { description: 'Validation error or export row cap exceeded', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      401: { description: 'Unauthorized', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Admin required', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };

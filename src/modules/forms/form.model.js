@@ -23,9 +23,9 @@ const Form = sequelize.define(
       defaultValue: 'ALP',
     },
     duty_type: {
-      type: DataTypes.ENUM('SIGN_IN', 'SIGN_OFF'),
+      type: DataTypes.ENUM('SIGN_ON', 'SIGN_OFF'),
       allowNull: false,
-      defaultValue: 'SIGN_IN',
+      defaultValue: 'SIGN_ON',
     },
     is_active: {
       type: DataTypes.BOOLEAN,
