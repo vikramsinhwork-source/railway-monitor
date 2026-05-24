@@ -581,6 +581,8 @@ Suites under `tests/`: `auth`, `rbac`, `management` (divisions, lobbies, devices
 
 **GitHub Actions:** `.github/workflows/deploy-pm2.yml` — on push to **`main`**, self-hosted runner runs `npm ci`, **`pm2 restart railway-monitoring --update-env`**, `pm2 save`, `pm2 status`. Align the PM2 process name and app directory on the host.
 
+**Reverse proxy upload size:** If monitor clients get **HTTP 413** on `POST /api/face/recognize`, the request is usually rejected by **nginx** (default `client_max_body_size` is **1m**) or another proxy before Express runs. The API allows up to **5 MB** per image (`avatarUpload.middleware.js`). Raise nginx to at least **10m** — see `deploy/nginx-upload-limits.conf.example`, then `sudo nginx -t && sudo systemctl reload nginx`.
+
 ---
 
 ## Production considerations
@@ -590,7 +592,8 @@ Suites under `tests/`: `auth`, `rbac`, `management` (divisions, lobbies, devices
 3. **`sync({ alter: true })`:** Convenient for iteration; for production many teams prefer migrations-only + controlled schema deploys.
 4. **Scale-out:** Multiple Node instances need a **Redis adapter** (or similar) for Socket.IO room consistency; this codebase assumes a single logical realtime instance unless you add that.
 5. **TLS:** Terminate HTTPS/WSS in front (reverse proxy or PaaS).
-6. **Legacy routes:** Restrict or remove `GET /api/auth/users` and in-memory `register` in locked-down environments.
+6. **Face recognize uploads:** Monitor clients should POST **multipart/form-data** with field name **`image`**, prefer **JPEG** face crops (not full-frame PNG), and keep dimensions around **640–1024 px** on the long edge so payloads stay well under proxy limits.
+7. **Legacy routes:** Restrict or remove `GET /api/auth/users` and in-memory `register` in locked-down environments.
 
 ---
 

@@ -22,7 +22,8 @@ const DEFAULT_LIMITS = {
   'offer': 30,             // 30 offers per minute per client
   'answer': 30,            // 30 answers per minute per client
   'ice-candidate': 60,     // 60 ICE candidates per minute per client
-  'monitor-message': 60    // 60 messages per minute per monitor
+  'monitor-message': 60,   // 60 messages per minute per monitor
+  'join-as-observer': 20,  // 20 observer joins per minute per client
 };
 
 /**

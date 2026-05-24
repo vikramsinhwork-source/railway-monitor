@@ -6,6 +6,8 @@ import Device from '../modules/divisions/device.model.js';
 import MonitorLobbyAccess from '../modules/access/monitorLobby.model.js';
 import AuditLog from '../modules/audit/auditLog.model.js';
 import MonitoringSession from '../modules/realtime/monitoringSession.model.js';
+import SessionObserver from '../modules/observer/sessionObserver.model.js';
+import MonitoringAuditLog from '../modules/observer/monitoringAuditLog.model.js';
 import SocketPresence from '../modules/realtime/socketPresence.model.js';
 import DeviceCommand from '../modules/realtime/deviceCommand.model.js';
 import DeviceLog from '../modules/health/deviceLog.model.js';
@@ -173,6 +175,56 @@ export function initModels() {
     onUpdate: 'CASCADE',
   });
 
+  MonitoringSession.hasMany(SessionObserver, {
+    foreignKey: 'session_id',
+    as: 'observers',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  SessionObserver.belongsTo(MonitoringSession, {
+    foreignKey: 'session_id',
+    as: 'session',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  User.hasMany(SessionObserver, {
+    foreignKey: 'observer_user_id',
+    as: 'sessionObserverEntries',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  SessionObserver.belongsTo(User, {
+    foreignKey: 'observer_user_id',
+    as: 'observerUser',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+
+  User.hasMany(MonitoringAuditLog, {
+    foreignKey: 'observer_user_id',
+    as: 'monitoringAuditLogs',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE',
+  });
+  MonitoringAuditLog.belongsTo(User, {
+    foreignKey: 'observer_user_id',
+    as: 'observerUser',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE',
+  });
+  MonitoringSession.hasMany(MonitoringAuditLog, {
+    foreignKey: 'session_id',
+    as: 'auditLogs',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE',
+  });
+  MonitoringAuditLog.belongsTo(MonitoringSession, {
+    foreignKey: 'session_id',
+    as: 'session',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE',
+  });
+
   Device.hasMany(DeviceCommand, {
     foreignKey: 'device_id',
     as: 'commandQueue',
@@ -321,6 +373,8 @@ export {
   MonitorLobbyAccess,
   AuditLog,
   MonitoringSession,
+  SessionObserver,
+  MonitoringAuditLog,
   SocketPresence,
   DeviceCommand,
   DeviceLog,

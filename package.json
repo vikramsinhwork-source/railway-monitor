@@ -10,6 +10,9 @@
     "test": "node --import dotenv/config scripts/wait-for-server.mjs && node --import dotenv/config --test --test-concurrency=1 tests",
     "test:parallel": "node --test tests",
     "test:live-smoke": "LIVE_SMOKE=1 node --test tests/live-smoke.test.js",
+    "test:observer": "node --test tests/observer/*.unit.test.js",
+    "verify:observer": "node scripts/verify-monitoring-system.mjs",
+    "load:observers": "node --import dotenv/config scripts/load-test-observers.mjs",
     "monitor:live": "node scripts/live-monitor.js"
   },
   "keywords": [

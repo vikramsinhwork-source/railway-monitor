@@ -64,6 +64,15 @@ import {
   logError,
   logDebug
 } from '../utils/logger.js';
+import { forwardWebRtcSignaling } from './webrtc-signaling.js';
+import {
+  registerObserverHandlers,
+  handleMonitoringStartedRegistry,
+  handleMonitoringEndedRegistry,
+  handleObserverDisconnect,
+  startObserverStaleCleanup,
+} from './observer.handlers.js';
+import { normalizeRole, ROLES as APP_ROLES } from '../middleware/rbac.middleware.js';
 
 /**
  * In-memory session/call state is keyed by device UUID (Phase 4) or legacy kiosk id.
@@ -120,6 +129,7 @@ export const initializeSocket = (io) => {
   // Start periodic heartbeat timeout checking
   startHeartbeatChecker(io);
   startRealtimePresenceChecker(io);
+  startObserverStaleCleanup(io);
 
   // Session timeout disabled: monitoring sessions stay active until admin stops,
   // kiosk goes offline, or monitor/kiosk disconnects. No automatic idle timeout.
@@ -192,6 +202,8 @@ export const initializeSocket = (io) => {
       transport: socket.conn.transport.name,
       userId: userId || 'none'
     });
+
+    registerObserverHandlers(io, socket);
 
     // Join role-specific room for targeted broadcasts
     if (role === ROLES.MONITOR) {
@@ -454,6 +466,16 @@ export const initializeSocket = (io) => {
               timestamp: new Date().toISOString(),
               compatibilityMode: 'legacy-non-uuid',
             });
+            await handleMonitoringStartedRegistry({
+              kioskId: deviceId,
+              kioskSocketId: kiosksState.getKiosk(deviceId)?.socketId,
+              kioskUserId: kiosksState.getKiosk(deviceId)?.userId,
+              monitorUserId: userId,
+              monitorSocketId: socket.id,
+              monitorClientId: clientId,
+              dbSession: null,
+              io,
+            });
             io.to('monitors').emit('session-status', {
               deviceId,
               status: 'ACTIVE',
@@ -478,14 +500,24 @@ export const initializeSocket = (io) => {
           }
 
           sessionsState.updateSessionActivity(deviceId);
-          socket.emit('monitoring-started', {
-            kioskId: deviceId,
-            deviceId,
-            sessionId: result.dbSession.id,
-            startedAt: result.dbSession.started_at,
-            timestamp: new Date().toISOString(),
-          });
-          io.to('monitors').emit('session-status', {
+            socket.emit('monitoring-started', {
+              kioskId: deviceId,
+              deviceId,
+              sessionId: result.dbSession.id,
+              startedAt: result.dbSession.started_at,
+              timestamp: new Date().toISOString(),
+            });
+            await handleMonitoringStartedRegistry({
+              kioskId: deviceId,
+              kioskSocketId: kiosksState.getKiosk(deviceId)?.socketId,
+              kioskUserId: kiosksState.getKiosk(deviceId)?.userId,
+              monitorUserId: userId,
+              monitorSocketId: socket.id,
+              monitorClientId: clientId,
+              dbSession: result.dbSession,
+              io,
+            });
+            io.to('monitors').emit('session-status', {
             deviceId,
             status: 'ACTIVE',
             sessionId: result.dbSession.id,
@@ -570,6 +602,7 @@ export const initializeSocket = (io) => {
         return;
       }
 
+      (async () => {
       try {
         const kiosk = kiosksState.getKiosk(kioskId);
         const kioskUserId = kiosk?.userId ?? null;
@@ -580,6 +613,17 @@ export const initializeSocket = (io) => {
           sessionId: kioskId,
           startedAt: session.startedAt.toISOString(),
           timestamp: new Date().toISOString()
+        });
+
+        await handleMonitoringStartedRegistry({
+          kioskId,
+          kioskSocketId: kiosk?.socketId,
+          kioskUserId,
+          monitorUserId: userId,
+          monitorSocketId: socket.id,
+          monitorClientId: clientId,
+          dbSession: null,
+          io,
         });
 
         logInfo('Session', 'Monitoring session started', {
@@ -604,6 +648,7 @@ export const initializeSocket = (io) => {
           kioskId
         });
       }
+      })();
     });
 
     /**
@@ -660,6 +705,11 @@ export const initializeSocket = (io) => {
             kioskId: deviceId,
             deviceId,
             timestamp: new Date().toISOString(),
+          });
+          await handleMonitoringEndedRegistry({
+            kioskId: deviceId,
+            io,
+            reason: 'monitor-stop',
           });
           io.to('monitors').emit('session-status', {
             deviceId,
@@ -724,6 +774,7 @@ export const initializeSocket = (io) => {
         return;
       }
 
+      (async () => {
       try {
         // End session
         const endedSession = sessionsState.endSession(kioskId);
@@ -731,6 +782,12 @@ export const initializeSocket = (io) => {
         socket.emit('monitoring-stopped', {
           kioskId,
           timestamp: new Date().toISOString()
+        });
+
+        await handleMonitoringEndedRegistry({
+          kioskId,
+          io,
+          reason: 'monitor-stop',
         });
 
         logInfo('Session', 'Monitoring session stopped', {
@@ -756,6 +813,7 @@ export const initializeSocket = (io) => {
           kioskId
         });
       }
+      })();
     });
 
     /**
@@ -803,6 +861,11 @@ export const initializeSocket = (io) => {
             kioskId: deviceId,
             forced: true,
             timestamp: new Date().toISOString(),
+          });
+          await handleMonitoringEndedRegistry({
+            kioskId: deviceId,
+            io,
+            reason: 'force-stop-monitoring',
           });
         } catch (error) {
           logError('Session', 'Force stop monitoring failed', {
@@ -993,6 +1056,20 @@ export const initializeSocket = (io) => {
         return;
       }
 
+      if (data?.signalingMode === 'observer' || socket.data?.isObserver) {
+        forwardWebRtcSignaling({
+          io,
+          socket,
+          type: 'offer',
+          data,
+          clientId,
+          role,
+          userId,
+          appUser,
+        });
+        return;
+      }
+
       // Determine sender and receiver roles
       const senderRole = role;
       
@@ -1154,6 +1231,20 @@ export const initializeSocket = (io) => {
         return;
       }
 
+      if (data?.signalingMode === 'observer' || socket.data?.isObserver) {
+        forwardWebRtcSignaling({
+          io,
+          socket,
+          type: 'answer',
+          data,
+          clientId,
+          role,
+          userId,
+          appUser,
+        });
+        return;
+      }
+
       // Determine sender and receiver roles
       const senderRole = role;
       
@@ -1307,6 +1398,20 @@ export const initializeSocket = (io) => {
           `Rate limit exceeded: ${rateLimit.current}/${rateLimit.limit} ICE candidates per minute`, {
             resetAt: rateLimit.resetAt.toISOString()
           });
+        return;
+      }
+
+      if (data?.signalingMode === 'observer' || socket.data?.isObserver) {
+        forwardWebRtcSignaling({
+          io,
+          socket,
+          type: 'ice-candidate',
+          data,
+          clientId,
+          role,
+          userId,
+          appUser,
+        });
         return;
       }
 
@@ -2350,6 +2455,11 @@ export const initializeSocket = (io) => {
               status: 'TIMEOUT',
               disconnectReason: 'kiosk-disconnect',
             });
+            await handleMonitoringEndedRegistry({
+              kioskId: clientId,
+              io,
+              reason: 'kiosk-disconnect',
+            });
           }
 
           if (thisSocketOwnsKiosk) {
@@ -2393,6 +2503,17 @@ export const initializeSocket = (io) => {
           }
 
         } else if (role === ROLES.MONITOR) {
+          await handleObserverDisconnect(io, socket);
+
+          const appRole = appUser?.role ? normalizeRole(appUser.role) : null;
+          const isFieldMonitor = !appUser || appRole === APP_ROLES.MONITOR;
+
+          if (!isFieldMonitor) {
+            logInfo('Socket', 'Admin socket disconnect — monitoring sessions preserved', {
+              clientId,
+              appRole,
+            });
+          } else {
           // End all active sessions owned by this monitor (one monitor can have multiple kiosk sessions)
           const endedSessions = sessionsState.endSessionByMonitorSocket(socket.id);
           await cacheDisconnectForReconnect({
@@ -2409,6 +2530,11 @@ export const initializeSocket = (io) => {
             disconnectReason: 'monitor-disconnect',
           });
           for (const endedSession of endedSessions) {
+            await handleMonitoringEndedRegistry({
+              kioskId: endedSession.kioskId,
+              io,
+              reason: 'monitor-disconnect',
+            });
             io.to('monitors').emit('session-ended', {
               kioskId: endedSession.kioskId,
               monitorId: clientId,
@@ -2436,6 +2562,7 @@ export const initializeSocket = (io) => {
               monitorId: monitor.monitorId,
               socketId: socket.id
             });
+          }
           }
         }
 

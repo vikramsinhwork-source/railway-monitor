@@ -1,0 +1,24 @@
+# Example snippet for railwaymonitor.in (or your domain).
+# 413 "Content Too Large" on POST /api/face/recognize usually means the reverse
+# proxy body limit is lower than the frame size the monitor client uploads.
+#
+# App limit (multer): 5 MB — see src/modules/users/avatarUpload.middleware.js
+# Rekognition accepts up to 15 MB, but face crops should be much smaller in practice.
+
+server {
+    listen 443 ssl;
+    server_name railwaymonitor.in;
+
+    # Allow multipart image uploads (face recognize, enroll, avatars).
+    # Default nginx is 1m, which rejects many camera JPEG/PNG frames before Node sees them.
+    client_max_body_size 10M;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
