@@ -6,6 +6,14 @@ import * as monitoringController from './monitoring.controller.js';
 
 const router = express.Router();
 
+function requireAuthHeaderOrQuery(req, res, next) {
+  const token = req.query.token || req.query.access_token;
+  if (token && !req.headers.authorization) {
+    req.headers.authorization = `Bearer ${token}`;
+  }
+  return requireAuth(req, res, next);
+}
+
 // Device agent endpoints (JWT device token)
 router.post('/devices/register', requireDeviceAuth, monitoringController.register);
 router.post('/devices/heartbeat', requireDeviceAuth, requireOwnDevice, monitoringController.heartbeat);
@@ -23,6 +31,7 @@ router.get('/lobby-streams', requireAuth, requireMonitor, monitoringController.d
 router.get('/lobbies/:lobbyId/streams', requireAuth, requireMonitor, monitoringController.lobbyStreams);
 router.get('/viewer', monitoringController.viewer);
 router.get('/devices/:id/streams/:streamName/frame', requireAuth, requireMonitor, monitoringController.getStreamFrame);
+router.get('/devices/:id/streams/:streamName/live.mjpeg', requireAuthHeaderOrQuery, requireMonitor, monitoringController.getStreamLiveMjpeg);
 router.get('/devices', requireAuth, requireMonitor, monitoringController.listDevices);
 router.get('/dashboard', requireAuth, requireMonitor, monitoringController.dashboard);
 router.get('/screenshots/:screenshotId', requireAuth, requireMonitor, monitoringController.getScreenshot);

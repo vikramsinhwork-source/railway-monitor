@@ -280,7 +280,7 @@ export async function getStreamFrame(req, res) {
   if (!result) return sendError(res, 'Device not found', 404);
   if (result.forbidden) return sendError(res, 'Forbidden', 403);
   if (result.notAgent) return sendError(res, 'Not a Raspberry Pi monitoring device', 400);
-  if (result.notFound) return sendError(res, 'Stream frame not found', 404);
+  if (result.notFound || !result.stream) return sendError(res, 'Stream frame not found', 404);
 
   res.setHeader('Content-Type', result.mimeType);
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -288,6 +288,19 @@ export async function getStreamFrame(req, res) {
     if (!res.headersSent) sendError(res, 'Stream frame file not found', 404);
   });
   result.stream.pipe(res);
+}
+
+export async function getStreamLiveMjpeg(req, res) {
+  const result = await monitoringService.streamLiveMjpegForUser(
+    req.params.id,
+    req.params.streamName,
+    req.user,
+    res
+  );
+  if (!result) return sendError(res, 'Device not found', 404);
+  if (result.forbidden) return sendError(res, 'Forbidden', 403);
+  if (result.notAgent) return sendError(res, 'Not a Raspberry Pi monitoring device', 400);
+  if (result.notFound) return sendError(res, 'Stream frame not found', 404);
 }
 
 export async function lobbyStreams(req, res) {
@@ -372,9 +385,14 @@ export function viewer(req, res) {
 
     function cardHtml(stream) {
       const cls = stream.online ? 'online' : 'offline';
-      const img = stream.frame_url
-        ? '<img data-frame-url="' + stream.frame_url + '" alt="' + stream.label + '" />'
-        : '<div class="empty">No frame yet</div>';
+      const liveUrl = stream.live_mjpeg_url
+        ? stream.live_mjpeg_url + '?token=' + encodeURIComponent(token)
+        : null;
+      const img = liveUrl
+        ? '<img src="' + liveUrl + '" alt="' + stream.label + '" />'
+        : (stream.frame_url
+          ? '<img data-frame-url="' + stream.frame_url + '" alt="' + stream.label + '" />'
+          : '<div class="empty">No frame yet</div>');
       return '<div class="card">' + img +
         '<div class="meta"><div><strong>' + stream.label + '</strong><br><small>' + stream.name + '</small></div>' +
         '<span class="badge ' + cls + '">' + (stream.online ? 'online' : 'offline') + '</span></div></div>';
@@ -422,8 +440,7 @@ export function viewer(req, res) {
     document.getElementById('loginBtn').onclick = () => login().catch((e) => alert(e.message));
     document.getElementById('refreshBtn').onclick = () => loadStreams().catch((e) => alert(e.message));
     if (token) loadStreams().catch(() => {});
-    setInterval(() => { if (token) loadStreams().catch(() => {}); }, 10000);
-    setInterval(() => { if (token) loadFrameImages().catch(() => {}); }, 5000);
+    setInterval(() => { if (token) loadStreams().catch(() => {}); }, 30000);
   </script>
 </body>
 </html>`);

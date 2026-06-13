@@ -42,6 +42,9 @@ temp/
 *.pid.lock
 *.seed
 
+# Uploaded runtime media (screenshots, stream frames)
+uploads/
+
 # Optional local DB (if used)
 *.sqlite
 *.sqlite3

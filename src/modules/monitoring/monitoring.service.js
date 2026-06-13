@@ -540,6 +540,11 @@ function buildFrameUrl(baseUrl, deviceId, streamName) {
   return `${baseUrl.replace(/\/$/, '')}/api/monitoring/devices/${deviceId}/streams/${encodeURIComponent(streamName)}/frame`;
 }
 
+function buildLiveMjpegUrl(baseUrl, deviceId, streamName) {
+  if (!baseUrl || !deviceId || !streamName) return null;
+  return `${baseUrl.replace(/\/$/, '')}/api/monitoring/devices/${deviceId}/streams/${encodeURIComponent(streamName)}/live.mjpeg`;
+}
+
 function inferStreamMeta(streamName, lobbyDevices = []) {
   const key = String(streamName || '').toLowerCase();
   const kioskMatch = key.match(/^kiosk(\d+)$/);
@@ -611,6 +616,7 @@ async function buildLobbyStreamsPayload(lobby, user, baseUrl) {
       linked_device_id: meta.linked_device_id,
       linked_device_name: meta.linked_device_name,
       frame_url: buildFrameUrl(baseUrl, piAgent.id, stream.name),
+      live_mjpeg_url: buildLiveMjpegUrl(baseUrl, piAgent.id, stream.name),
       frame_updated_at: frameMeta?.updated_at || null,
       pi_device_id: piAgent.id,
     };
@@ -681,17 +687,59 @@ export async function getStreamFrameForUser(deviceId, streamName, user) {
   const frameMeta = device?.meta?.stream_frames?.[streamName];
   const storagePath = frameMeta?.storage_path || streamFramePath(deviceId, streamName);
 
+  let exists = true;
   try {
     await fs.access(storagePath);
   } catch {
-    return { notFound: true };
+    exists = false;
   }
 
   return {
     mimeType: frameMeta?.mime_type || 'image/jpeg',
-    stream: createReadStream(storagePath),
+    storagePath,
+    stream: exists ? createReadStream(storagePath) : null,
     updated_at: frameMeta?.updated_at || null,
+    notFound: !exists,
   };
+}
+
+const MJPEG_BOUNDARY = '--railwatchframe';
+
+export async function streamLiveMjpegForUser(deviceId, streamName, user, res) {
+  const access = await getMonitoringDeviceForUser(deviceId, user);
+  if (!access) return { notFound: true };
+  if (access.forbidden) return { forbidden: true };
+  if (access.notAgent) return { notAgent: true };
+
+  const device = await Device.findByPk(deviceId);
+  const frameMeta = device?.meta?.stream_frames?.[streamName];
+  const storagePath = frameMeta?.storage_path || streamFramePath(deviceId, streamName);
+
+  res.writeHead(200, {
+    'Content-Type': `multipart/x-mixed-replace; boundary=${MJPEG_BOUNDARY}`,
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Connection': 'keep-alive',
+    Pragma: 'no-cache',
+  });
+
+  let closed = false;
+  res.on('close', () => { closed = true; });
+
+  while (!closed) {
+    try {
+      const buffer = await fs.readFile(storagePath);
+      if (buffer.length > 0) {
+        res.write(`${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${buffer.length}\r\n\r\n`);
+        res.write(buffer);
+        res.write('\r\n');
+      }
+    } catch {
+      // wait for Pi to upload first frame
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  return { ok: true };
 }
 
 export async function getLobbyStreamsForUser(lobbyId, user, { baseUrl } = {}) {
