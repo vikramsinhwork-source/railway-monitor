@@ -388,31 +388,46 @@ export function viewer(req, res) {
 
     function cardHtml(stream) {
       const cls = stream.online ? 'online' : 'offline';
-      const liveUrl = stream.live_mjpeg_url
-        ? stream.live_mjpeg_url + '?token=' + encodeURIComponent(token)
-        : null;
-      const img = liveUrl
-        ? '<img src="' + liveUrl + '" alt="' + stream.label + '" />'
-        : (stream.frame_url
-          ? '<img data-frame-url="' + stream.frame_url + '" alt="' + stream.label + '" />'
-          : '<div class="empty">No frame yet</div>');
+      const img = stream.frame_url
+        ? '<img data-frame-url="' + stream.frame_url + '" alt="' + stream.label + '" />'
+        : '<div class="empty">No frame yet</div>';
       return '<div class="card">' + img +
         '<div class="meta"><div><strong>' + stream.label + '</strong><br><small>' + stream.name + '</small></div>' +
         '<span class="badge ' + cls + '">' + (stream.online ? 'online' : 'offline') + '</span></div></div>';
     }
 
+    // Poll each frame independently and refresh continuously. Short-lived requests
+    // multiplex cleanly over HTTP/2 (Cloudflare), unlike many persistent MJPEG streams.
+    async function refreshImage(img) {
+      try {
+        const res = await fetch(img.dataset.frameUrl + '?t=' + Date.now(), {
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const old = img.src;
+        img.src = url;
+        if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+      } catch (_) {}
+    }
+
+    let frameLoopRunning = false;
+    async function frameLoop() {
+      if (frameLoopRunning) return;
+      frameLoopRunning = true;
+      while (token) {
+        const imgs = [...document.querySelectorAll('img[data-frame-url]')];
+        if (imgs.length) await Promise.all(imgs.map(refreshImage));
+        await new Promise((r) => setTimeout(r, 700));
+      }
+      frameLoopRunning = false;
+    }
+
     async function loadFrameImages() {
-      const imgs = document.querySelectorAll('img[data-frame-url]');
-      await Promise.all([...imgs].map(async (img) => {
-        try {
-          const res = await fetch(img.dataset.frameUrl + '?t=' + Date.now(), {
-            headers: { Authorization: 'Bearer ' + token },
-          });
-          if (!res.ok) return;
-          const blob = await res.blob();
-          img.src = URL.createObjectURL(blob);
-        } catch (_) {}
-      }));
+      const imgs = [...document.querySelectorAll('img[data-frame-url]')];
+      await Promise.all(imgs.map(refreshImage));
+      frameLoop();
     }
 
     async function loadStreams() {
