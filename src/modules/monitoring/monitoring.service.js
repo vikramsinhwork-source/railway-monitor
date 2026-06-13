@@ -725,18 +725,26 @@ export async function streamLiveMjpegForUser(deviceId, streamName, user, res) {
   let closed = false;
   res.on('close', () => { closed = true; });
 
+  let lastMtimeMs = 0;
+  const pollMs = Number(process.env.MONITORING_MJPEG_POLL_MS || 200);
+
   while (!closed) {
     try {
-      const buffer = await fs.readFile(storagePath);
-      if (buffer.length > 0) {
-        res.write(`${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${buffer.length}\r\n\r\n`);
-        res.write(buffer);
-        res.write('\r\n');
+      const stat = await fs.stat(storagePath);
+      // Only push a new part when the frame file actually changed.
+      if (stat.mtimeMs !== lastMtimeMs) {
+        const buffer = await fs.readFile(storagePath);
+        if (buffer.length > 0) {
+          lastMtimeMs = stat.mtimeMs;
+          res.write(`${MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: ${buffer.length}\r\n\r\n`);
+          res.write(buffer);
+          res.write('\r\n');
+        }
       }
     } catch {
       // wait for Pi to upload first frame
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
 
   return { ok: true };
