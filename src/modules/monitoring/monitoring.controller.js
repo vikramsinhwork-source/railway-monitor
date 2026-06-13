@@ -14,15 +14,18 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
-function rateLimitDevice(req, res, eventType) {
+function rateLimitDevice(req, res, eventType, perMinute = 120) {
   const deviceId = req.deviceAuth?.deviceId || req.ip;
-  const limit = checkRateLimit(deviceId, eventType, 120);
+  const limit = checkRateLimit(deviceId, eventType, perMinute);
   if (!limit.allowed) {
     sendError(res, `Rate limit exceeded for ${eventType}`, 429);
     return false;
   }
   return true;
 }
+
+// Live frame uploads run at sub-second intervals across many streams per Pi.
+const STREAM_FRAME_RATE_LIMIT = Number(process.env.MONITORING_STREAM_FRAME_RATE_LIMIT || 3000);
 
 export async function register(req, res) {
   if (!rateLimitDevice(req, res, 'monitoring-register')) return;
@@ -238,7 +241,7 @@ function requestBaseUrl(req) {
 export const streamFrameUpload = [
   upload.single('frame'),
   async (req, res) => {
-    if (!rateLimitDevice(req, res, 'monitoring-stream-frame')) return;
+    if (!rateLimitDevice(req, res, 'monitoring-stream-frame', STREAM_FRAME_RATE_LIMIT)) return;
 
     const deviceId = req.params.id || req.deviceAuth?.deviceId;
     const streamName = req.params.streamName;
