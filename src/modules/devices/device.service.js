@@ -265,6 +265,70 @@ export async function reactivateDeviceForUser(id, user) {
   return { device: after };
 }
 
+/** Pi railwatch-agent: RASPBERRY type, or legacy KIOSK rows with agent telemetry. */
+export function isPiMonitoringAgent(device) {
+  if (!device) return false;
+  if (device.device_type === 'RASPBERRY') return true;
+  if (device.device_type === 'KIOSK' && (device.agent_version || device.meta?.agent)) {
+    return true;
+  }
+  return false;
+}
+
+export async function listMonitoringAgentDevices(user, filters = {}) {
+  const role = normalizeRole(user.role);
+  const where = {
+    [Op.or]: [
+      { device_type: 'RASPBERRY' },
+      {
+        device_type: 'KIOSK',
+        [Op.or]: [
+          { agent_version: { [Op.ne]: null } },
+          { meta: { agent: { [Op.ne]: null } } },
+        ],
+      },
+    ],
+  };
+
+  if (filters.division_id) where.division_id = filters.division_id;
+  if (filters.lobby_id) where.lobby_id = filters.lobby_id;
+  if (filters.status) where.status = filters.status;
+  if (filters.is_active !== undefined) where.is_active = filters.is_active;
+  if (filters.search) {
+    where[Op.and] = [
+      ...(where[Op.and] || []),
+      {
+        [Op.or]: [
+          { device_name: { [Op.iLike]: `%${filters.search}%` } },
+          { ip_address: { [Op.iLike]: `%${filters.search}%` } },
+          { serial_number: { [Op.iLike]: `%${filters.search}%` } },
+        ],
+      },
+    ];
+  }
+
+  if (isDivisionAdmin(role)) {
+    if (!user.division_id) return { rows: [], count: 0 };
+    where.division_id = user.division_id;
+  } else if (isMonitor(role)) {
+    if (!user.division_id) return { rows: [], count: 0 };
+    where.division_id = user.division_id;
+  } else if (!isSuperAdmin(role)) {
+    return { rows: [], count: 0 };
+  }
+
+  const devices = await Device.findAndCountAll({
+    where,
+    limit: filters.limit,
+    offset: filters.offset,
+    order: [[filters.sortField || 'created_at', filters.sortDirection || 'DESC']],
+  });
+  return {
+    rows: devices.rows.map(toDeviceResponse),
+    count: devices.count,
+  };
+}
+
 export async function listRaspberryDevices(user, filters = {}) {
   return listDevicesForUser(user, {
     ...filters,

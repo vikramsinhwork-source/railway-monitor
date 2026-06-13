@@ -9,16 +9,19 @@ import DeviceHeartbeat from './deviceHeartbeat.model.js';
 import DeviceScreenshot from './deviceScreenshot.model.js';
 import { createAuditLog } from '../audit/audit.service.js';
 import { normalizeRole } from '../../middleware/rbac.middleware.js';
-import { listRaspberryDevices, getDeviceByIdForUser } from '../devices/device.service.js';
+import { listMonitoringAgentDevices, getDeviceByIdForUser, isPiMonitoringAgent } from '../devices/device.service.js';
 import {
   enqueueDeviceCommand,
   upsertAgentSocketPresence,
   touchAgentHeartbeat,
 } from '../../socket/realtime.manager.js';
+import Lobby from '../divisions/lobby.model.js';
 import { logWarn } from '../../utils/logger.js';
 
 const SCREENSHOT_DIR = process.env.MONITORING_SCREENSHOT_DIR
   || path.join(process.cwd(), 'uploads', 'monitoring-screenshots');
+const STREAM_FRAME_DIR = process.env.MONITORING_STREAM_FRAME_DIR
+  || path.join(process.cwd(), 'uploads', 'monitoring-stream-frames');
 const SCREENSHOT_TTL_HOURS = Number(process.env.MONITORING_SCREENSHOT_TTL_HOURS || 72);
 
 const DEVICE_COMMAND_MAP = {
@@ -303,7 +306,7 @@ export async function storeScreenshot({ deviceId, screenType, buffer, mimeType, 
 }
 
 export async function listMonitoringDevicesForUser(user, filters = {}) {
-  const result = await listRaspberryDevices(user, filters);
+  const result = await listMonitoringAgentDevices(user, filters);
   return {
     devices: result.rows.map(toMonitoringDeviceResponse),
     count: result.count,
@@ -314,7 +317,7 @@ export async function getMonitoringDeviceForUser(id, user) {
   const result = await getDeviceByIdForUser(id, user);
   if (!result) return null;
   if (result.forbidden) return { forbidden: true };
-  if (result.device.device_type !== 'RASPBERRY') return { notAgent: true };
+  if (!isPiMonitoringAgent(result.device)) return { notAgent: true };
   return { device: await getDeviceStatus(id) };
 }
 
@@ -521,6 +524,243 @@ export async function getScreenshotForUser(screenshotId, user) {
     storagePath: screenshot.storage_path,
     mimeType: screenshot.mime_type || 'image/png',
     stream: createReadStream(screenshot.storage_path),
+  };
+}
+
+function safeStreamFileName(streamName) {
+  return String(streamName || 'stream').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function streamFramePath(deviceId, streamName, ext = 'jpg') {
+  return path.join(STREAM_FRAME_DIR, deviceId, `${safeStreamFileName(streamName)}.${ext}`);
+}
+
+function buildFrameUrl(baseUrl, deviceId, streamName) {
+  if (!baseUrl || !deviceId || !streamName) return null;
+  return `${baseUrl.replace(/\/$/, '')}/api/monitoring/devices/${deviceId}/streams/${encodeURIComponent(streamName)}/frame`;
+}
+
+function inferStreamMeta(streamName, lobbyDevices = []) {
+  const key = String(streamName || '').toLowerCase();
+  const kioskMatch = key.match(/^kiosk(\d+)$/);
+  if (kioskMatch) {
+    const label = `Kiosk ${kioskMatch[1]}`;
+    const linked = lobbyDevices.find((d) => d.device_name === label);
+    return { label, stream_type: 'kiosk', linked_device_id: linked?.id || null, linked_device_name: linked?.device_name || label };
+  }
+  const camMatch = key.match(/^(camera|cctv)(\d+)$/i);
+  if (camMatch) {
+    const label = `Camera ${camMatch[2]}`;
+    const linked = lobbyDevices.find((d) => d.device_name === label);
+    return { label, stream_type: 'cctv', linked_device_id: linked?.id || null, linked_device_name: linked?.device_name || label };
+  }
+  const nvrMatch = key.match(/^nvr(\d*)$/i);
+  if (nvrMatch) {
+    return { label: nvrMatch[1] ? `NVR ${nvrMatch[1]}` : 'NVR', stream_type: 'nvr', linked_device_id: null, linked_device_name: null };
+  }
+  return { label: streamName, stream_type: 'stream', linked_device_id: null, linked_device_name: null };
+}
+
+function extractGo2rtcStreams(device) {
+  const streams = device?.go2rtc_status?.streams
+    || device?.stream_status?.streams
+    || device?.stream_status?.go2rtc?.streams
+    || [];
+  return Array.isArray(streams) ? streams : [];
+}
+
+async function findPiAgentsInLobby(lobbyId) {
+  const devices = await Device.findAll({
+    where: { lobby_id: lobbyId, is_active: true },
+    order: [['updated_at', 'DESC']],
+  });
+  return devices.filter((d) => isPiMonitoringAgent(d));
+}
+
+async function buildLobbyStreamsPayload(lobby, user, baseUrl) {
+  const lobbyDevices = await Device.findAll({
+    where: { lobby_id: lobby.id, is_active: true },
+    order: [['device_name', 'ASC']],
+  });
+
+  const piAgents = lobbyDevices.filter((d) => isPiMonitoringAgent(d));
+  const piAgent = piAgents[0] || null;
+
+  if (!piAgent) {
+    return {
+      pi_device_id: null,
+      pi_online: false,
+      streams: [],
+      summary: { total: 0, online: 0, offline: 0 },
+    };
+  }
+
+  const go2rtcStreams = extractGo2rtcStreams(piAgent);
+  const streams = go2rtcStreams.map((stream) => {
+    const meta = inferStreamMeta(stream.name, lobbyDevices);
+    const frameMeta = piAgent.meta?.stream_frames?.[stream.name];
+    return {
+      name: stream.name,
+      label: meta.label,
+      stream_type: meta.stream_type,
+      online: stream.online === true || stream.status === 'online',
+      status: stream.status || (stream.online ? 'online' : 'offline'),
+      source: stream.source || null,
+      codec: stream.codec || null,
+      fps: stream.fps ?? null,
+      linked_device_id: meta.linked_device_id,
+      linked_device_name: meta.linked_device_name,
+      frame_url: buildFrameUrl(baseUrl, piAgent.id, stream.name),
+      frame_updated_at: frameMeta?.updated_at || null,
+      pi_device_id: piAgent.id,
+    };
+  });
+
+  const online = streams.filter((s) => s.online).length;
+  return {
+    pi_device_id: piAgent.id,
+    pi_device_name: piAgent.device_name,
+    pi_online: piAgent.status === 'ONLINE',
+    pi_ip: piAgent.ip_address,
+    streams,
+    summary: {
+      total: streams.length,
+      online,
+      offline: streams.length - online,
+    },
+  };
+}
+
+export async function storeStreamFrame({ deviceId, streamName, buffer, mimeType }) {
+  const device = await Device.findByPk(deviceId);
+  if (!device) {
+    return { ok: false, code: 'DEVICE_NOT_FOUND', message: 'Device not found' };
+  }
+
+  const ext = mimeType?.includes('png') ? 'png' : 'jpg';
+  const storagePath = streamFramePath(deviceId, streamName, ext);
+  await fs.mkdir(path.dirname(storagePath), { recursive: true });
+  await fs.writeFile(storagePath, buffer);
+
+  const updatedAt = new Date().toISOString();
+  const meta = {
+    ...(device.meta || {}),
+    stream_frames: {
+      ...(device.meta?.stream_frames || {}),
+      [streamName]: {
+        updated_at: updatedAt,
+        storage_path: storagePath,
+        mime_type: mimeType || `image/${ext}`,
+        size_bytes: buffer.length,
+      },
+    },
+  };
+
+  await device.update({
+    meta,
+    last_seen_at: new Date(),
+    status: 'ONLINE',
+  });
+
+  return {
+    ok: true,
+    deviceId,
+    streamName,
+    updated_at: updatedAt,
+    size_bytes: buffer.length,
+  };
+}
+
+export async function getStreamFrameForUser(deviceId, streamName, user) {
+  const access = await getMonitoringDeviceForUser(deviceId, user);
+  if (!access) return null;
+  if (access.forbidden) return { forbidden: true };
+  if (access.notAgent) return { notAgent: true };
+
+  const device = await Device.findByPk(deviceId);
+  const frameMeta = device?.meta?.stream_frames?.[streamName];
+  const storagePath = frameMeta?.storage_path || streamFramePath(deviceId, streamName);
+
+  try {
+    await fs.access(storagePath);
+  } catch {
+    return { notFound: true };
+  }
+
+  return {
+    mimeType: frameMeta?.mime_type || 'image/jpeg',
+    stream: createReadStream(storagePath),
+    updated_at: frameMeta?.updated_at || null,
+  };
+}
+
+export async function getLobbyStreamsForUser(lobbyId, user, { baseUrl } = {}) {
+  const lobby = await Lobby.findByPk(lobbyId);
+  if (!lobby) return null;
+
+  const role = normalizeRole(user.role);
+  if (role !== 'SUPER_ADMIN') {
+    if (!user.division_id || user.division_id !== lobby.division_id) {
+      return { forbidden: true };
+    }
+  }
+
+  const payload = await buildLobbyStreamsPayload(lobby, user, baseUrl);
+  return {
+    lobby_id: lobby.id,
+    lobby_name: lobby.name,
+    station_name: lobby.station_name,
+    division_id: lobby.division_id,
+    ...payload,
+  };
+}
+
+export async function getDivisionLobbyStreamsForUser(user, { baseUrl } = {}) {
+  const role = normalizeRole(user.role);
+  if (role === 'USER') return { forbidden: true };
+
+  let divisionId = user.division_id;
+  if (role === 'SUPER_ADMIN' && !divisionId) {
+    const firstPi = await Device.findOne({
+      where: { agent_version: { [Op.ne]: null } },
+      order: [['updated_at', 'DESC']],
+    });
+    divisionId = firstPi?.division_id || null;
+  }
+  if (!divisionId) return { forbidden: true };
+
+  const lobbies = await Lobby.findAll({
+    where: { division_id: divisionId, status: true },
+    order: [['name', 'ASC']],
+  });
+
+  const lobbyResults = [];
+  for (const lobby of lobbies) {
+    const payload = await buildLobbyStreamsPayload(lobby, user, baseUrl);
+    lobbyResults.push({
+      lobby_id: lobby.id,
+      lobby_name: lobby.name,
+      station_name: lobby.station_name,
+      ...payload,
+    });
+  }
+
+  let totalStreams = 0;
+  let onlineStreams = 0;
+  for (const lobby of lobbyResults) {
+    totalStreams += lobby.summary?.total || 0;
+    onlineStreams += lobby.summary?.online || 0;
+  }
+
+  return {
+    division_id: divisionId,
+    lobbies: lobbyResults,
+    summary: {
+      lobby_count: lobbyResults.length,
+      total_streams: totalStreams,
+      online_streams: onlineStreams,
+      offline_streams: totalStreams - onlineStreams,
+    },
   };
 }
 

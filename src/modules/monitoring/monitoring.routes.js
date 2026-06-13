@@ -11,8 +11,18 @@ router.post('/devices/register', requireDeviceAuth, monitoringController.registe
 router.post('/devices/heartbeat', requireDeviceAuth, requireOwnDevice, monitoringController.heartbeat);
 router.post('/devices/stream-status', requireDeviceAuth, requireOwnDevice, monitoringController.streamStatus);
 router.post('/devices/screenshot', requireDeviceAuth, requireOwnDevice, ...monitoringController.screenshotUpload);
+router.post(
+  '/devices/:id/streams/:streamName/frame',
+  requireDeviceAuth,
+  requireOwnDevice,
+  ...monitoringController.streamFrameUpload
+);
 
 // Admin / monitor endpoints
+router.get('/lobby-streams', requireAuth, requireMonitor, monitoringController.divisionLobbyStreams);
+router.get('/lobbies/:lobbyId/streams', requireAuth, requireMonitor, monitoringController.lobbyStreams);
+router.get('/viewer', monitoringController.viewer);
+router.get('/devices/:id/streams/:streamName/frame', requireAuth, requireMonitor, monitoringController.getStreamFrame);
 router.get('/devices', requireAuth, requireMonitor, monitoringController.listDevices);
 router.get('/dashboard', requireAuth, requireMonitor, monitoringController.dashboard);
 router.get('/screenshots/:screenshotId', requireAuth, requireMonitor, monitoringController.getScreenshot);

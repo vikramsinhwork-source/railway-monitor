@@ -15,6 +15,7 @@ import {
 import {
   disableDeviceForUser,
   getDeviceByIdForUser,
+  isPiMonitoringAgent,
   listRaspberryDevices,
   reactivateDeviceForUser,
 } from '../devices/device.service.js';
@@ -34,7 +35,7 @@ async function logAgentEvent(device, logType, message, details = null) {
 
 async function getRaspberryDevice(deviceId) {
   const device = await Device.findByPk(deviceId);
-  if (!device || device.device_type !== 'RASPBERRY') return null;
+  if (!isPiMonitoringAgent(device)) return null;
   return device;
 }
 
@@ -212,7 +213,7 @@ export async function getAgentByIdForUser(id, user) {
   const result = await getDeviceByIdForUser(id, user);
   if (!result) return null;
   if (result.forbidden) return { forbidden: true };
-  if (result.device.device_type !== 'RASPBERRY') return { notAgent: true };
+  if (!isPiMonitoringAgent(result.device)) return { notAgent: true };
   return { agent: result.device };
 }
 
