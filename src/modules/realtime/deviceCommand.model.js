@@ -17,7 +17,19 @@ const DeviceCommand = sequelize.define(
       onDelete: 'CASCADE',
     },
     command: {
-      type: DataTypes.ENUM('REBOOT', 'REFRESH_STREAM', 'OPEN_VNC', 'RESTART_APP'),
+      type: DataTypes.ENUM(
+        'REBOOT',
+        'REFRESH_STREAM',
+        'OPEN_VNC',
+        'RESTART_APP',
+        'START_KIOSK_STREAM',
+        'STOP_KIOSK_STREAM',
+        'START_CCTV_STREAM',
+        'STOP_CCTV_STREAM',
+        'REBOOT_PI',
+        'REFRESH_RTSP',
+        'TAKE_SCREENSHOT'
+      ),
       allowNull: false,
     },
     payload: {

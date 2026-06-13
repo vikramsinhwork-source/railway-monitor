@@ -78,7 +78,7 @@ function chooseRecoveryCommand(device, reason) {
   if (device.device_type === 'KIOSK' && (lowerReason.includes('stale') || lowerReason.includes('heartbeat'))) {
     return 'RESTART_APP';
   }
-  if (device.device_type === 'RASPBERRY') return 'REBOOT';
+  if (device.device_type === 'RASPBERRY') return 'REBOOT_PI';
   return 'REFRESH_STREAM';
 }
 
@@ -412,5 +412,38 @@ export async function triggerManualRecovery(user, deviceId) {
     queueId: queued.command.id,
     deviceId: device.id,
     status: 'RECOVERING',
+  };
+}
+
+export async function getAgentHealth(deviceId) {
+  const device = await Device.findByPk(deviceId);
+  if (!device || device.device_type !== 'RASPBERRY') return null;
+
+  const presence = await SocketPresence.findOne({
+    where: { device_id: deviceId, is_online: true },
+    order: [['last_heartbeat_at', 'DESC']],
+  });
+
+  const latestSnapshot = await DeviceHealthSnapshot.findOne({
+    where: { device_id: deviceId, check_tier: 'AGENT_HEARTBEAT' },
+    order: [['created_at', 'DESC']],
+  });
+
+  const metrics = latestSnapshot?.check_result || {};
+
+  return {
+    deviceId: device.id,
+    online: device.status === 'ONLINE' && !!presence?.is_online,
+    lastHeartbeat: presence?.last_heartbeat_at || device.last_seen_at,
+    lastSeenAt: device.last_seen_at,
+    cpu: metrics.cpu ?? null,
+    memory: metrics.memory ?? null,
+    disk: metrics.disk ?? null,
+    temperature: metrics.temperature ?? null,
+    uptime: metrics.uptime ?? null,
+    kioskOnline: metrics.kioskOnline ?? null,
+    cctvOnline: metrics.cctvOnline ?? null,
+    vncOnline: metrics.vncOnline ?? null,
+    healthStatus: device.health_status,
   };
 }

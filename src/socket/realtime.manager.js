@@ -116,6 +116,70 @@ export async function upsertSocketPresence({ userId, socketId, role, divisionId 
   }
 }
 
+export async function upsertAgentSocketPresence({ deviceId, socketId, divisionId = null, lobbyId = null }) {
+  if (!deviceId || !socketId) return null;
+  const existing = await SocketPresence.findOne({ where: { socket_id: socketId } });
+  if (existing) {
+    await existing.update({
+      device_id: deviceId,
+      user_id: null,
+      role: 'RASPBERRY_AGENT',
+      division_id: divisionId,
+      lobby_id: lobbyId,
+      last_heartbeat_at: now(),
+      is_online: true,
+      offline_reason: null,
+    });
+    return existing;
+  }
+
+  const existingForDevice = await SocketPresence.findOne({
+    where: { device_id: deviceId, is_online: true },
+    order: [['updated_at', 'DESC']],
+  });
+  if (existingForDevice) {
+    await existingForDevice.update({
+      socket_id: socketId,
+      role: 'RASPBERRY_AGENT',
+      division_id: divisionId,
+      lobby_id: lobbyId,
+      last_heartbeat_at: now(),
+      is_online: true,
+      offline_reason: null,
+    });
+    return existingForDevice;
+  }
+
+  return SocketPresence.create({
+    device_id: deviceId,
+    user_id: null,
+    socket_id: socketId,
+    role: 'RASPBERRY_AGENT',
+    division_id: divisionId,
+    lobby_id: lobbyId,
+    last_heartbeat_at: now(),
+    is_online: true,
+  });
+}
+
+export async function markAgentPresenceOffline({ deviceId, socketId, reason = null }) {
+  if (!deviceId && !socketId) return;
+  const where = socketId ? { socket_id: socketId } : { device_id: deviceId, is_online: true };
+  await SocketPresence.update(
+    { is_online: false, offline_reason: reason, updated_at: now() },
+    { where }
+  );
+}
+
+export async function touchAgentHeartbeat({ deviceId, socketId }) {
+  if (!deviceId && !socketId) return;
+  const where = socketId ? { socket_id: socketId } : { device_id: deviceId, is_online: true };
+  await SocketPresence.update(
+    { last_heartbeat_at: now(), is_online: true },
+    { where }
+  );
+}
+
 export async function markSocketPresenceOffline({ socketId, userId, reason = null }) {
   if (!socketId && !userId) return;
   const where = socketId ? { socket_id: socketId } : { user_id: userId, is_online: true };
@@ -470,7 +534,19 @@ export function buildPresenceRole({ socketRole, appRole }) {
   return mapUserRoleToPresenceRole(appRole, socketRole);
 }
 
-const ALLOWED_COMMANDS = new Set(['REBOOT', 'REFRESH_STREAM', 'OPEN_VNC', 'RESTART_APP']);
+const ALLOWED_COMMANDS = new Set([
+  'REBOOT',
+  'REFRESH_STREAM',
+  'OPEN_VNC',
+  'RESTART_APP',
+  'START_KIOSK_STREAM',
+  'STOP_KIOSK_STREAM',
+  'START_CCTV_STREAM',
+  'STOP_CCTV_STREAM',
+  'REBOOT_PI',
+  'REFRESH_RTSP',
+  'TAKE_SCREENSHOT',
+]);
 
 export async function enqueueDeviceCommand({ deviceId, command, payload = null, requestedBy }) {
   const normalizedCommand = String(command || '').toUpperCase();

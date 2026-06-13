@@ -12,6 +12,7 @@ import SocketPresence from '../modules/realtime/socketPresence.model.js';
 import DeviceCommand from '../modules/realtime/deviceCommand.model.js';
 import DeviceLog from '../modules/health/deviceLog.model.js';
 import DeviceHealthSnapshot from '../modules/health/deviceHealthSnapshot.model.js';
+import StreamSession from '../modules/streams/streamSession.model.js';
 import { initFormModels } from '../modules/forms/index.js';
 
 let initialized = false;
@@ -361,6 +362,31 @@ export function initModels() {
     onUpdate: 'CASCADE',
   });
 
+  Device.hasMany(StreamSession, {
+    foreignKey: 'device_id',
+    as: 'streamSessions',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  StreamSession.belongsTo(Device, {
+    foreignKey: 'device_id',
+    as: 'device',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  User.hasMany(StreamSession, {
+    foreignKey: 'viewer_user_id',
+    as: 'streamSessions',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  StreamSession.belongsTo(User, {
+    foreignKey: 'viewer_user_id',
+    as: 'viewerUser',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+
   initialized = true;
 }
 
@@ -379,4 +405,5 @@ export {
   DeviceCommand,
   DeviceLog,
   DeviceHealthSnapshot,
+  StreamSession,
 };

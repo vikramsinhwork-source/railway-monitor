@@ -17,9 +17,12 @@ import formsRoutes from './modules/forms/forms.routes.js';
 import divisionRoutes from './modules/divisions/division.route.js';
 import lobbyRoutes from './modules/lobbies/lobby.route.js';
 import deviceRoutes from './modules/devices/device.route.js';
+import agentRoutes from './modules/agents/agent.route.js';
+import streamRoutes from './modules/streams/stream.route.js';
 import healthRoutes from './modules/health/health.routes.js';
 import analyticsRoutes from './modules/analytics/analytics.routes.js';
 import { startDeviceHealthScheduler } from './services/deviceHealth.scheduler.js';
+import { startStreamIdleCleanup } from './modules/streams/stream.service.js';
 import { ensureCollection } from './services/rekognitionFace.js';
 import faceRoutes from './modules/face/face.routes.js';
 
@@ -111,6 +114,8 @@ app.use('/api/forms', formsRoutes);
 app.use('/api/divisions', divisionRoutes);
 app.use('/api/lobbies', lobbyRoutes);
 app.use('/api/devices', deviceRoutes);
+app.use('/api/agents', agentRoutes);
+app.use('/api/streams', streamRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/analytics', analyticsRoutes);
 logInfo('Server', 'Auth and user routes registered', {
@@ -197,8 +202,10 @@ io.use(authenticateSocket);
 logInfo('Server', 'Authentication middleware applied to Socket.IO');
 
 // Initialize socket event handlers
+app.set('io', io);
 initializeSocket(io);
 startDeviceHealthScheduler(io);
+startStreamIdleCleanup(io);
 logInfo('Server', 'Socket event handlers initialized');
 
 const PORT = process.env.PORT || 3000;

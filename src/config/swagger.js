@@ -1679,6 +1679,204 @@ spec.paths['/api/analytics/autoheal'] = {
   },
 };
 
+spec.paths['/api/agents'] = {
+  get: {
+    tags: ['Agents'],
+    summary: 'List Raspberry Pi agents',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'page', in: 'query', schema: { type: 'integer', default: 1 } },
+      { name: 'limit', in: 'query', schema: { type: 'integer', default: 25 } },
+      { name: 'division_id', in: 'query', schema: { type: 'string', format: 'uuid' } },
+      { name: 'lobby_id', in: 'query', schema: { type: 'string', format: 'uuid' } },
+      { name: 'status', in: 'query', schema: { type: 'string', enum: ['ONLINE', 'OFFLINE', 'MAINTENANCE'] } },
+    ],
+    responses: {
+      200: { description: 'Agents list' },
+      401: { description: 'Unauthorized' },
+      403: { description: 'Forbidden' },
+    },
+  },
+};
+
+spec.paths['/api/agents/{id}'] = {
+  get: {
+    tags: ['Agents'],
+    summary: 'Get agent details',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Agent details' },
+      400: { description: 'Not a Raspberry Pi agent' },
+      404: { description: 'Agent not found' },
+    },
+  },
+};
+
+spec.paths['/api/agents/{id}/health'] = {
+  get: {
+    tags: ['Agents'],
+    summary: 'Get latest agent health metrics',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Agent health snapshot' },
+      404: { description: 'Agent not found' },
+    },
+  },
+};
+
+spec.paths['/api/agents/{id}/logs'] = {
+  get: {
+    tags: ['Agents'],
+    summary: 'Get agent logs',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'limit', in: 'query', schema: { type: 'integer', default: 100 } },
+    ],
+    responses: {
+      200: { description: 'Agent logs' },
+      404: { description: 'Agent not found' },
+    },
+  },
+};
+
+spec.paths['/api/agents/{id}/command'] = {
+  post: {
+    tags: ['Agents'],
+    summary: 'Send command to agent',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['command'],
+            properties: {
+              command: {
+                type: 'string',
+                enum: [
+                  'START_KIOSK_STREAM',
+                  'STOP_KIOSK_STREAM',
+                  'START_CCTV_STREAM',
+                  'STOP_CCTV_STREAM',
+                  'OPEN_VNC',
+                  'REBOOT_PI',
+                  'REFRESH_RTSP',
+                  'TAKE_SCREENSHOT',
+                  'REBOOT',
+                  'REFRESH_STREAM',
+                  'RESTART_APP',
+                ],
+              },
+              payload: { type: 'object', nullable: true },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      201: { description: 'Command queued' },
+      400: { description: 'Invalid command or agent disabled' },
+      403: { description: 'Forbidden' },
+    },
+  },
+};
+
+spec.paths['/api/agents/{id}/enable'] = {
+  patch: {
+    tags: ['Agents'],
+    summary: 'Enable agent',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Agent enabled' },
+      403: { description: 'Forbidden' },
+      404: { description: 'Agent not found' },
+    },
+  },
+};
+
+spec.paths['/api/agents/{id}/disable'] = {
+  patch: {
+    tags: ['Agents'],
+    summary: 'Disable agent',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Agent disabled' },
+      403: { description: 'Forbidden' },
+      404: { description: 'Agent not found' },
+    },
+  },
+};
+
+spec.paths['/api/streams/request'] = {
+  post: {
+    tags: ['Streams'],
+    summary: 'Request a live stream session',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['deviceId', 'streamType'],
+            properties: {
+              deviceId: { type: 'string', format: 'uuid' },
+              streamType: { type: 'string', enum: ['KIOSK', 'CCTV'] },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      201: { description: 'Stream session created', content: { 'application/json': { schema: { type: 'object', properties: { sessionId: { type: 'string', format: 'uuid' } } } } } },
+      403: { description: 'Forbidden' },
+      409: { description: 'Active stream already exists' },
+    },
+  },
+};
+
+spec.paths['/api/streams/active'] = {
+  get: {
+    tags: ['Streams'],
+    summary: 'List active stream sessions',
+    security: [{ bearerAuth: [] }],
+    responses: {
+      200: { description: 'Active stream sessions' },
+      403: { description: 'Forbidden' },
+    },
+  },
+};
+
+spec.paths['/api/streams/{sessionId}'] = {
+  get: {
+    tags: ['Streams'],
+    summary: 'Get stream session by id',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'sessionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Stream session details' },
+      404: { description: 'Not found' },
+    },
+  },
+  delete: {
+    tags: ['Streams'],
+    summary: 'Close stream session',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'sessionId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Stream closed' },
+      404: { description: 'Not found' },
+    },
+  },
+};
+
 spec.paths['/health'] = {
   get: {
     tags: ['System'],

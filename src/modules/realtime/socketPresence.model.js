@@ -11,8 +11,15 @@ const SocketPresence = sequelize.define(
     },
     user_id: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true,
       references: { model: 'users', key: 'id' },
+      onUpdate: 'CASCADE',
+      onDelete: 'CASCADE',
+    },
+    device_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: { model: 'devices', key: 'id' },
       onUpdate: 'CASCADE',
       onDelete: 'CASCADE',
     },
@@ -61,6 +68,7 @@ const SocketPresence = sequelize.define(
     updatedAt: 'updated_at',
     indexes: [
       { fields: ['user_id'], name: 'socket_presence_user_id_idx' },
+      { fields: ['device_id'], name: 'socket_presence_device_id_idx' },
       { fields: ['division_id'], name: 'socket_presence_division_id_idx' },
       { fields: ['lobby_id'], name: 'socket_presence_lobby_id_idx' },
       { fields: ['is_online', 'last_heartbeat_at'], name: 'socket_presence_online_heartbeat_idx' },

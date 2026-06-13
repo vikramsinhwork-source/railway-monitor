@@ -72,6 +72,8 @@ import {
   handleObserverDisconnect,
   startObserverStaleCleanup,
 } from './observer.handlers.js';
+import { registerAgentHandlers } from './agent.handlers.js';
+import { registerStreamHandlers } from './stream.handlers.js';
 import { normalizeRole, ROLES as APP_ROLES } from '../middleware/rbac.middleware.js';
 
 /**
@@ -204,6 +206,8 @@ export const initializeSocket = (io) => {
     });
 
     registerObserverHandlers(io, socket);
+    const agentHandlers = registerAgentHandlers(io, socket);
+    const streamHandlers = registerStreamHandlers(io, socket);
 
     // Join role-specific room for targeted broadcasts
     if (role === ROLES.MONITOR) {
@@ -2429,6 +2433,14 @@ export const initializeSocket = (io) => {
           userId,
           reason: offlineReason,
         });
+
+        if (agentHandlers?.handleDisconnect) {
+          await agentHandlers.handleDisconnect(offlineReason);
+        }
+
+        if (streamHandlers?.handleDisconnect) {
+          await streamHandlers.handleDisconnect(offlineReason);
+        }
 
         if (role === ROLES.KIOSK) {
           // Remove heartbeat tracking for this connection

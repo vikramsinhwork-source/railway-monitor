@@ -264,3 +264,10 @@ export async function reactivateDeviceForUser(id, user) {
 
   return { device: after };
 }
+
+export async function listRaspberryDevices(user, filters = {}) {
+  return listDevicesForUser(user, {
+    ...filters,
+    device_type: 'RASPBERRY',
+  });
+}
