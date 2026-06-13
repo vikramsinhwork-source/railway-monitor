@@ -13,6 +13,8 @@ import DeviceCommand from '../modules/realtime/deviceCommand.model.js';
 import DeviceLog from '../modules/health/deviceLog.model.js';
 import DeviceHealthSnapshot from '../modules/health/deviceHealthSnapshot.model.js';
 import StreamSession from '../modules/streams/streamSession.model.js';
+import DeviceHeartbeat from '../modules/monitoring/deviceHeartbeat.model.js';
+import DeviceScreenshot from '../modules/monitoring/deviceScreenshot.model.js';
 import { initFormModels } from '../modules/forms/index.js';
 
 let initialized = false;
@@ -387,6 +389,32 @@ export function initModels() {
     onUpdate: 'CASCADE',
   });
 
+  Device.hasMany(DeviceHeartbeat, {
+    foreignKey: 'device_id',
+    as: 'heartbeats',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  DeviceHeartbeat.belongsTo(Device, {
+    foreignKey: 'device_id',
+    as: 'device',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+
+  Device.hasMany(DeviceScreenshot, {
+    foreignKey: 'device_id',
+    as: 'screenshots',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  DeviceScreenshot.belongsTo(Device, {
+    foreignKey: 'device_id',
+    as: 'device',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+
   initialized = true;
 }
 
@@ -406,4 +434,6 @@ export {
   DeviceLog,
   DeviceHealthSnapshot,
   StreamSession,
+  DeviceHeartbeat,
+  DeviceScreenshot,
 };

@@ -546,6 +546,9 @@ const ALLOWED_COMMANDS = new Set([
   'REBOOT_PI',
   'REFRESH_RTSP',
   'TAKE_SCREENSHOT',
+  'RESTART_GO2RTC',
+  'RESTART_AGENT',
+  'UPDATE_AGENT',
 ]);
 
 export async function enqueueDeviceCommand({ deviceId, command, payload = null, requestedBy }) {

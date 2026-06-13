@@ -73,6 +73,7 @@ import {
   startObserverStaleCleanup,
 } from './observer.handlers.js';
 import { registerAgentHandlers } from './agent.handlers.js';
+import { registerMonitoringHandlers } from './monitoring.handlers.js';
 import { registerStreamHandlers } from './stream.handlers.js';
 import { normalizeRole, ROLES as APP_ROLES } from '../middleware/rbac.middleware.js';
 
@@ -207,6 +208,7 @@ export const initializeSocket = (io) => {
 
     registerObserverHandlers(io, socket);
     const agentHandlers = registerAgentHandlers(io, socket);
+    const monitoringHandlers = registerMonitoringHandlers(io, socket);
     const streamHandlers = registerStreamHandlers(io, socket);
 
     // Join role-specific room for targeted broadcasts
@@ -2436,6 +2438,10 @@ export const initializeSocket = (io) => {
 
         if (agentHandlers?.handleDisconnect) {
           await agentHandlers.handleDisconnect(offlineReason);
+        }
+
+        if (monitoringHandlers?.handleDisconnect) {
+          await monitoringHandlers.handleDisconnect(offlineReason);
         }
 
         if (streamHandlers?.handleDisconnect) {

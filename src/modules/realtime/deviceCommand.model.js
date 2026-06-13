@@ -28,7 +28,10 @@ const DeviceCommand = sequelize.define(
         'STOP_CCTV_STREAM',
         'REBOOT_PI',
         'REFRESH_RTSP',
-        'TAKE_SCREENSHOT'
+        'TAKE_SCREENSHOT',
+        'RESTART_GO2RTC',
+        'RESTART_AGENT',
+        'UPDATE_AGENT'
       ),
       allowNull: false,
     },

@@ -24,6 +24,14 @@ const DEFAULT_LIMITS = {
   'ice-candidate': 60,     // 60 ICE candidates per minute per client
   'monitor-message': 60,   // 60 messages per minute per monitor
   'join-as-observer': 20,  // 20 observer joins per minute per client
+  'device:online': 30,
+  'device:heartbeat': 120,
+  'device:stream-status': 60,
+  'device:screenshot': 20,
+  'monitoring-register': 30,
+  'monitoring-heartbeat': 120,
+  'monitoring-stream-status': 60,
+  'monitoring-screenshot': 20,
 };
 
 /**

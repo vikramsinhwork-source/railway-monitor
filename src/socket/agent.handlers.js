@@ -15,6 +15,13 @@ import {
   validateRegisterAgent,
 } from '../modules/agents/agent.validator.js';
 
+function warnDeprecatedEvent(event, clientId) {
+  logWarn('Agent', `Deprecated socket event "${event}" — use device:* monitoring events instead`, {
+    clientId,
+    replacement: event.replace('agent-', 'device:').replace('register-agent', 'device:online'),
+  });
+}
+
 /**
  * Register Raspberry Pi agent socket event handlers.
  */
@@ -23,6 +30,17 @@ export function registerAgentHandlers(io, socket) {
   let registeredDeviceId = null;
 
   socket.on('register-agent', async (payload = {}) => {
+    warnDeprecatedEvent('register-agent', clientId);
+    if (socket.data.monitoringRegistered) {
+      socket.emit('agent-registered', {
+        deviceId: socket.data.agentDeviceId || payload?.deviceId,
+        status: 'ONLINE',
+        deprecated: true,
+        timestamp: new Date().toISOString(),
+      });
+      return;
+    }
+
     logInfo('Agent', 'Register agent request received', {
       clientId,
       socketId: socket.id,
@@ -88,6 +106,12 @@ export function registerAgentHandlers(io, socket) {
   });
 
   socket.on('agent-heartbeat', async (payload = {}) => {
+    warnDeprecatedEvent('agent-heartbeat', clientId);
+    if (socket.data.monitoringRegistered) {
+      socket.emit('agent-heartbeat-ack', { deprecated: true, timestamp: new Date().toISOString() });
+      return;
+    }
+
     const deviceId = payload?.deviceId || registeredDeviceId || socket.data.agentDeviceId;
     if (!deviceId) {
       emitError(socket, ERROR_CODES.INVALID_REQUEST, 'deviceId is required', {
@@ -144,6 +168,12 @@ export function registerAgentHandlers(io, socket) {
   });
 
   socket.on('agent-status-update', async (payload = {}) => {
+    warnDeprecatedEvent('agent-status-update', clientId);
+    if (socket.data.monitoringRegistered) {
+      socket.emit('agent-status-update-ack', { deprecated: true, timestamp: new Date().toISOString() });
+      return;
+    }
+
     const deviceId = payload?.deviceId || registeredDeviceId || socket.data.agentDeviceId;
     if (!deviceId) {
       emitError(socket, ERROR_CODES.INVALID_REQUEST, 'deviceId is required', {
@@ -191,6 +221,11 @@ export function registerAgentHandlers(io, socket) {
   });
 
   socket.on('agent-command-result', async (payload = {}) => {
+    warnDeprecatedEvent('agent-command-result', clientId);
+    if (socket.data.monitoringRegistered) {
+      return;
+    }
+
     const validation = validateAgentCommandResult(payload);
     if (!validation.isValid) {
       emitError(socket, ERROR_CODES.INVALID_REQUEST, validation.errors[0], {
@@ -238,6 +273,8 @@ export function registerAgentHandlers(io, socket) {
   return {
     getRegisteredDeviceId: () => registeredDeviceId || socket.data.agentDeviceId || null,
     handleDisconnect: async (reason) => {
+      if (socket.data.monitoringRegistered) return;
+
       const deviceId = registeredDeviceId || socket.data.agentDeviceId;
       if (!deviceId) return;
 

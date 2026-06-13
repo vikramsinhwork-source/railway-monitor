@@ -120,6 +120,22 @@ const Device = sequelize.define(
       type: DataTypes.STRING(120),
       allowNull: true,
     },
+    stream_status: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+    },
+    go2rtc_status: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+    },
+    agent_version: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    last_screenshot_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
     notes: {
       type: DataTypes.TEXT,
       allowNull: true,
