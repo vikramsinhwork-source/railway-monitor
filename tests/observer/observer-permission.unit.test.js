@@ -18,9 +18,9 @@ describe('observer-permission.service', () => {
     assert.equal(r.allowed, true);
   });
 
-  it('denies MONITOR observer', () => {
+  it('allows MONITOR observer', () => {
     const r = canJoinAsObserver({ role: ROLES.MONITOR, userId: '3' });
-    assert.equal(r.allowed, false);
+    assert.equal(r.allowed, true);
   });
 
   it('denies USER/KIOSK observer', () => {
@@ -40,6 +40,23 @@ describe('observer-permission.service', () => {
   it('DIVISION_ADMIN cross division denied', () => {
     const r = canObserveSession(
       { role: ROLES.DIVISION_ADMIN, division_id: '11111111-1111-4111-8111-111111111111' },
+      { division_id: '22222222-2222-4222-8222-222222222222' }
+    );
+    assert.equal(r.allowed, false);
+  });
+
+  it('MONITOR same division allowed', () => {
+    const div = '11111111-1111-4111-8111-111111111111';
+    const r = canObserveSession(
+      { role: ROLES.MONITOR, division_id: div },
+      { division_id: div }
+    );
+    assert.equal(r.allowed, true);
+  });
+
+  it('MONITOR cross division denied', () => {
+    const r = canObserveSession(
+      { role: ROLES.MONITOR, division_id: '11111111-1111-4111-8111-111111111111' },
       { division_id: '22222222-2222-4222-8222-222222222222' }
     );
     assert.equal(r.allowed, false);

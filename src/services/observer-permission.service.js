@@ -8,13 +8,13 @@ import { logMonitoringAudit } from './monitoring-audit.service.js';
 export const OBSERVER_ALLOWED_ROLES = new Set([
   ROLES.SUPER_ADMIN,
   ROLES.DIVISION_ADMIN,
+  ROLES.MONITOR,
 ]);
 
 /**
  * Roles explicitly denied observer mode.
  */
 export const OBSERVER_DENIED_ROLES = new Set([
-  ROLES.MONITOR,
   ROLES.USER,
 ]);
 
@@ -60,6 +60,13 @@ export function canObserveSession(user, session) {
       return { allowed: false, reason: 'Division admin has no division scope' };
     }
     if (!session?.division_id || user.division_id !== session.division_id) {
+      return { allowed: false, reason: 'Cross-division observer access denied' };
+    }
+    return { allowed: true };
+  }
+
+  if (role === ROLES.MONITOR) {
+    if (user.division_id && session?.division_id && user.division_id !== session.division_id) {
       return { allowed: false, reason: 'Cross-division observer access denied' };
     }
     return { allowed: true };

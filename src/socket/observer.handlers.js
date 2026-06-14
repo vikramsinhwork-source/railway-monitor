@@ -163,11 +163,6 @@ export function registerObserverHandlers(io, socket) {
       return;
     }
 
-    if (appRole === APP_ROLES.MONITOR) {
-      emitError(socket, ERROR_CODES.OPERATION_NOT_ALLOWED, 'MONITOR role cannot join as observer');
-      return;
-    }
-
     const result = await joinAsObserver({
       user: appUser,
       sessionId,

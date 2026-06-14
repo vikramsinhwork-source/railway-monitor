@@ -31,6 +31,7 @@ import {
 import * as kiosksState from '../state/kiosks.state.js';
 import * as monitorsState from '../state/monitors.state.js';
 import * as sessionsState from '../state/sessions.state.js';
+import * as activeSessionsState from '../state/active-sessions.state.js';
 import * as userSessionsState from '../state/user-sessions.state.js';
 import {
   checkRateLimit,
@@ -76,6 +77,8 @@ import { registerAgentHandlers } from './agent.handlers.js';
 import { registerMonitoringHandlers } from './monitoring.handlers.js';
 import { registerStreamHandlers } from './stream.handlers.js';
 import { normalizeRole, ROLES as APP_ROLES } from '../middleware/rbac.middleware.js';
+import { canJoinAsObserver } from '../services/observer-permission.service.js';
+import { joinAsObserver } from '../services/session.service.js';
 
 /**
  * In-memory session/call state is keyed by device UUID (Phase 4) or legacy kiosk id.
@@ -453,6 +456,40 @@ export const initializeSocket = (io) => {
             if (sessionsState.hasActiveSession(deviceId)) {
               const existingSession = sessionsState.getSession(deviceId);
               if (existingSession.monitorSocketId !== socket.id) {
+                const activeSession = activeSessionsState.getActiveSessionByKioskId(deviceId);
+                const observerPermission = canJoinAsObserver(appUser);
+                if (activeSession?.session_id && observerPermission.allowed) {
+                  const observerJoin = await joinAsObserver({
+                    user: appUser,
+                    sessionId: activeSession.session_id,
+                    observerSocketId: socket.id,
+                    observerClientId: clientId,
+                    ipAddress: socket.handshake?.address || null,
+                    deviceInfo: { userAgent: socket.handshake?.headers?.['user-agent'] },
+                  });
+
+                  if (observerJoin.ok) {
+                    socket.data.isObserver = true;
+                    socket.data.observerSessionId = observerJoin.session.session_id;
+                    socket.emit('monitoring-started', {
+                      kioskId: deviceId,
+                      deviceId,
+                      sessionId: observerJoin.session.session_id,
+                      timestamp: new Date().toISOString(),
+                      signalingMode: 'observer',
+                      recvOnly: true,
+                      observer: true,
+                      existingMonitorId: existingSession.monitorId,
+                    });
+                    logInfo('Session', 'Joined active session as observer', {
+                      monitorId: clientId,
+                      kioskId: deviceId,
+                      sessionId: observerJoin.session.session_id,
+                      existingMonitorId: existingSession.monitorId,
+                    });
+                    return;
+                  }
+                }
                 emitError(socket, ERROR_CODES.SESSION_ALREADY_EXISTS,
                   `Kiosk ${deviceId} is already being monitored by another monitor`, {
                     existingMonitorId: existingSession.monitorId,
