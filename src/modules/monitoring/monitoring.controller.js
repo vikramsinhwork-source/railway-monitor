@@ -27,6 +27,27 @@ function rateLimitDevice(req, res, eventType, perMinute = 120) {
 // Live frame uploads run at sub-second intervals across many streams per Pi.
 const STREAM_FRAME_RATE_LIMIT = Number(process.env.MONITORING_STREAM_FRAME_RATE_LIMIT || 3000);
 
+// #region agent log
+function debugLog(hypothesisId, location, message, data = {}, runId = 'run1') {
+  fetch('http://127.0.0.1:7515/ingest/ab84a119-a91c-4713-881e-a8c644fb3969', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Debug-Session-Id': '2b0af4',
+    },
+    body: JSON.stringify({
+      sessionId: '2b0af4',
+      runId,
+      hypothesisId,
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+}
+// #endregion
+
 export async function register(req, res) {
   if (!rateLimitDevice(req, res, 'monitoring-register')) return;
 
@@ -283,10 +304,30 @@ export async function getStreamFrame(req, res) {
   if (!result) return sendError(res, 'Device not found', 404);
   if (result.forbidden) return sendError(res, 'Forbidden', 403);
   if (result.notAgent) return sendError(res, 'Not a Raspberry Pi monitoring device', 400);
-  if (result.notFound || !result.stream) return sendError(res, 'Stream frame not found', 404);
+  if (result.notFound || !result.stream) {
+    // #region agent log
+    debugLog('H3', 'monitoring.controller.js:getStreamFrame:notFound', 'Stream frame not found on serve', {
+      deviceId: req.params.id,
+      streamName: req.params.streamName,
+      tsParamPresent: req.query?._ts != null,
+      cacheControlReq: req.get('cache-control') || null,
+    });
+    // #endregion
+    return sendError(res, 'Stream frame not found', 404);
+  }
 
   res.setHeader('Content-Type', result.mimeType);
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  // #region agent log
+  debugLog('H4', 'monitoring.controller.js:getStreamFrame:serve', 'Serving stream frame response', {
+    deviceId: req.params.id,
+    streamName: req.params.streamName,
+    tsParamPresent: req.query?._ts != null,
+    pragmaReq: req.get('pragma') || null,
+    mimeType: result.mimeType,
+    frameMetaUpdatedAt: result.updated_at || null,
+  });
+  // #endregion
   result.stream.on('error', () => {
     if (!res.headersSent) sendError(res, 'Stream frame file not found', 404);
   });

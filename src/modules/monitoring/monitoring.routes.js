@@ -3,6 +3,7 @@ import { requireAuth } from '../../middleware/auth.middleware.js';
 import { requireMonitor } from '../../middleware/rbac.middleware.js';
 import { requireDeviceAuth, requireOwnDevice } from './monitoring.middleware.js';
 import * as monitoringController from './monitoring.controller.js';
+import { proxyWebrtcOffer, getWebrtcConfig } from './monitoring.webrtc.controller.js';
 
 const router = express.Router();
 
@@ -25,6 +26,10 @@ router.post(
   requireOwnDevice,
   ...monitoringController.streamFrameUpload
 );
+
+// WebRTC signaling — Flutter sends offer, Railway proxies to Pi, video goes direct
+router.get('/devices/:id/webrtc/config', requireAuth, requireMonitor, getWebrtcConfig);
+router.post('/devices/:id/streams/:streamName/webrtc/offer', requireAuth, requireMonitor, proxyWebrtcOffer);
 
 // Admin / monitor endpoints
 router.get('/lobby-streams', requireAuth, requireMonitor, monitoringController.divisionLobbyStreams);

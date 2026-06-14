@@ -40,6 +40,27 @@ const SOCKET_EVENT_MAP = {
   'capture-screenshot': 'device:capture-screenshot',
 };
 
+// #region agent log
+function debugLog(hypothesisId, location, message, data = {}, runId = 'run1') {
+  fetch('http://127.0.0.1:7515/ingest/ab84a119-a91c-4713-881e-a8c644fb3969', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Debug-Session-Id': '2b0af4',
+    },
+    body: JSON.stringify({
+      sessionId: '2b0af4',
+      runId,
+      hypothesisId,
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+}
+// #endregion
+
 function toMonitoringDeviceResponse(device) {
   return {
     id: device.id,
@@ -574,6 +595,19 @@ function extractGo2rtcStreams(device) {
   return Array.isArray(streams) ? streams : [];
 }
 
+function deriveFrameFreshness(frameUpdatedAt) {
+  if (!frameUpdatedAt) {
+    return { frame_age_ms: null, frame_freshness: 'missing' };
+  }
+  const ageMs = Date.now() - new Date(frameUpdatedAt).getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0) {
+    return { frame_age_ms: null, frame_freshness: 'unknown' };
+  }
+  if (ageMs < 2500) return { frame_age_ms: ageMs, frame_freshness: 'fresh' };
+  if (ageMs < 10000) return { frame_age_ms: ageMs, frame_freshness: 'lagging' };
+  return { frame_age_ms: ageMs, frame_freshness: 'stale' };
+}
+
 async function findPiAgentsInLobby(lobbyId) {
   const devices = await Device.findAll({
     where: { lobby_id: lobbyId, is_active: true },
@@ -604,6 +638,7 @@ async function buildLobbyStreamsPayload(lobby, user, baseUrl) {
   const streams = go2rtcStreams.map((stream) => {
     const meta = inferStreamMeta(stream.name, lobbyDevices);
     const frameMeta = piAgent.meta?.stream_frames?.[stream.name];
+    const freshness = deriveFrameFreshness(frameMeta?.updated_at || null);
     return {
       name: stream.name,
       label: meta.label,
@@ -618,7 +653,10 @@ async function buildLobbyStreamsPayload(lobby, user, baseUrl) {
       frame_url: buildFrameUrl(baseUrl, piAgent.id, stream.name),
       live_mjpeg_url: buildLiveMjpegUrl(baseUrl, piAgent.id, stream.name),
       frame_updated_at: frameMeta?.updated_at || null,
+      frame_age_ms: freshness.frame_age_ms,
+      frame_freshness: freshness.frame_freshness,
       pi_device_id: piAgent.id,
+      pi_ip: piAgent.ip_address || null,
     };
   });
 
@@ -667,6 +705,16 @@ export async function storeStreamFrame({ deviceId, streamName, buffer, mimeType 
     last_seen_at: new Date(),
     status: 'ONLINE',
   });
+  // #region agent log
+  debugLog('H2', 'monitoring.service.js:storeStreamFrame', 'Stored stream frame on backend', {
+    deviceId,
+    streamName,
+    sizeBytes: buffer.length,
+    mimeType: mimeType || `image/${ext}`,
+    storagePath,
+    updatedAt,
+  });
+  // #endregion
 
   return {
     ok: true,
@@ -688,11 +736,23 @@ export async function getStreamFrameForUser(deviceId, streamName, user) {
   const storagePath = frameMeta?.storage_path || streamFramePath(deviceId, streamName);
 
   let exists = true;
+  let fileMtimeMs = null;
   try {
-    await fs.access(storagePath);
+    const stat = await fs.stat(storagePath);
+    fileMtimeMs = stat.mtimeMs;
   } catch {
     exists = false;
   }
+  // #region agent log
+  debugLog('H3', 'monitoring.service.js:getStreamFrameForUser', 'Resolved stream frame path for request', {
+    deviceId,
+    streamName,
+    exists,
+    storagePath,
+    metaUpdatedAt: frameMeta?.updated_at || null,
+    fileMtimeMs,
+  });
+  // #endregion
 
   return {
     mimeType: frameMeta?.mime_type || 'image/jpeg',
