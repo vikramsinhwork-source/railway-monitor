@@ -6,6 +6,7 @@ import * as monitoringController from './monitoring.controller.js';
 import { proxyWebrtcOffer, getWebrtcConfig, getIceConfig } from './monitoring.webrtc.controller.js';
 
 const router = express.Router();
+const WEBRTC_OFFER_PATH = '/devices/:id/streams/:streamName/webrtc/offer';
 
 function requireAuthHeaderOrQuery(req, res, next) {
   const token = req.query.token || req.query.access_token;
@@ -13,6 +14,17 @@ function requireAuthHeaderOrQuery(req, res, next) {
     req.headers.authorization = `Bearer ${token}`;
   }
   return requireAuth(req, res, next);
+}
+
+function setWebrtcOfferCorsHeaders(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+}
+
+function webrtcOfferCorsGuard(req, res, next) {
+  setWebrtcOfferCorsHeaders(res);
+  return next();
 }
 
 // Device agent endpoints (JWT device token)
@@ -31,13 +43,11 @@ router.get('/ice-config', getIceConfig);
 
 // WebRTC signaling — Flutter sends offer, Railway proxies to Pi, video goes direct
 router.get('/devices/:id/webrtc/config', requireAuth, requireMonitor, getWebrtcConfig);
-router.options('/devices/:id/streams/:streamName/webrtc/offer', (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+router.use(WEBRTC_OFFER_PATH, webrtcOfferCorsGuard);
+router.options(WEBRTC_OFFER_PATH, (req, res) => {
   res.sendStatus(200);
 });
-router.post('/devices/:id/streams/:streamName/webrtc/offer', requireAuth, requireMonitor, proxyWebrtcOffer);
+router.post(WEBRTC_OFFER_PATH, requireAuth, requireMonitor, proxyWebrtcOffer);
 
 // Admin / monitor endpoints
 router.get('/lobby-streams', requireAuth, requireMonitor, monitoringController.divisionLobbyStreams);
