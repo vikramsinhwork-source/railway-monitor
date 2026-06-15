@@ -86,7 +86,7 @@ async function initDB() {
 
 // Only Express manages CORS; do not set Access-Control-* in Nginx or manually
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+app.options('*', cors());
 
 app.use(express.json());
 
