@@ -88,12 +88,11 @@ export async function getIceConfig(req, res) {
           urls: ['stun:stun.l.google.com:19302'],
         },
         {
-          urls: ['turn:turn.railwaymonitor.in:3478', 'turns:turn.railwaymonitor.in:5349'],
-          username: process.env.TURN_USERNAME,
-          credential: process.env.TURN_PASSWORD,
+          urls: ['turn:turn.railwaymonitor.in:3478'],
+          username: process.env.TURN_USERNAME || 'turnuser',
+          credential: process.env.TURN_PASSWORD || 'turnpassword',
         },
       ],
-      ttl: 86400,
     },
   });
 }
