@@ -79,6 +79,25 @@ export async function proxyWebrtcOffer(req, res) {
   }
 }
 
+export async function getIceConfig(req, res) {
+  return res.json({
+    success: true,
+    data: {
+      ice_servers: [
+        {
+          urls: ['stun:stun.l.google.com:19302'],
+        },
+        {
+          urls: ['turn:turn.railwaymonitor.in:3478', 'turns:turn.railwaymonitor.in:5349'],
+          username: process.env.TURN_USERNAME,
+          credential: process.env.TURN_PASSWORD,
+        },
+      ],
+      ttl: 86400,
+    },
+  });
+}
+
 export async function getWebrtcConfig(req, res) {
   const access = await getMonitoringDeviceForUser(req.params.id, req.user);
   if (!ensureAccessResult(access, res)) return;
