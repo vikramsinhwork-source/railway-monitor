@@ -26,6 +26,7 @@ function ensureAccessResult(result, res) {
 export async function proxyWebrtcOffer(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
 
   const { type, sdp } = req.body || {};
   if (type !== 'offer' || typeof sdp !== 'string' || !sdp.trim()) {
