@@ -60,6 +60,8 @@ export async function proxyWebrtcOffer(req, res) {
     }
 
     const answer = await response.json();
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
 
     return res.json({
       success: true,

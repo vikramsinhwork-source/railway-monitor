@@ -31,6 +31,12 @@ router.get('/ice-config', requireAuth, requireMonitor, getIceConfig);
 
 // WebRTC signaling — Flutter sends offer, Railway proxies to Pi, video goes direct
 router.get('/devices/:id/webrtc/config', requireAuth, requireMonitor, getWebrtcConfig);
+router.options('/devices/:id/streams/:streamName/webrtc/offer', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  res.sendStatus(200);
+});
 router.post('/devices/:id/streams/:streamName/webrtc/offer', requireAuth, requireMonitor, proxyWebrtcOffer);
 
 // Admin / monitor endpoints
