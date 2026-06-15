@@ -24,6 +24,9 @@ function ensureAccessResult(result, res) {
 }
 
 export async function proxyWebrtcOffer(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+
   const { type, sdp } = req.body || {};
   if (type !== 'offer' || typeof sdp !== 'string' || !sdp.trim()) {
     return sendError(res, 'Body must contain { type: "offer", sdp: string }', 400);
@@ -60,9 +63,6 @@ export async function proxyWebrtcOffer(req, res) {
     }
 
     const answer = await response.json();
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-
     return res.json({
       success: true,
       data: {

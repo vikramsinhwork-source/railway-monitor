@@ -27,7 +27,7 @@ router.post(
   ...monitoringController.streamFrameUpload
 );
 
-router.get('/ice-config', requireAuth, requireMonitor, getIceConfig);
+router.get('/ice-config', getIceConfig);
 
 // WebRTC signaling — Flutter sends offer, Railway proxies to Pi, video goes direct
 router.get('/devices/:id/webrtc/config', requireAuth, requireMonitor, getWebrtcConfig);

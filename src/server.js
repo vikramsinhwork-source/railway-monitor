@@ -60,13 +60,39 @@ function assertDatabaseEnv() {
 const app = express();
 const server = createServer(app);
 
-// CORS: default allow all origins. Set CORS_ORIGIN or CORS_ORIGINS (comma-separated) to restrict.
-const allowedOrigins = (() => {
+// CORS:
+// - Always allow localhost on any port for dev and railwaymonitor.in for prod.
+// - If CORS_ORIGIN/CORS_ORIGINS is empty, allow all (backward compatible).
+const configuredOrigins = (() => {
   const raw = process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '';
-  if (!raw.trim() || raw.trim() === '*') return true; // default: allow any origin
   return raw.split(',').map((o) => o.trim()).filter(Boolean);
 })();
-const corsAllowAll = allowedOrigins === true;
+const corsAllowAll = configuredOrigins.length === 0 || configuredOrigins.includes('*');
+const alwaysAllowedOriginPatterns = [
+  /^http:\/\/localhost(?::\d+)?$/i,
+  /^https:\/\/railwaymonitor\.in$/i,
+];
+
+function originMatchesEntry(origin, entry) {
+  if (entry === '*') return true;
+  if (!entry.includes('*')) return origin === entry;
+  const escaped = entry
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`, 'i').test(origin);
+}
+
+function isAllowedOrigin(origin) {
+  if (alwaysAllowedOriginPatterns.some((pattern) => pattern.test(origin))) return true;
+  return configuredOrigins.some((entry) => originMatchesEntry(origin, entry));
+}
+
+function corsOriginDelegate(origin, callback) {
+  // Non-browser requests may not send Origin header.
+  if (!origin) return callback(null, true);
+  if (corsAllowAll || isAllowedOrigin(origin)) return callback(null, true);
+  return callback(new Error('Not allowed by CORS'));
+}
 initModels();
 
 async function initDB() {
@@ -87,7 +113,7 @@ async function initDB() {
 
 // Only Express manages CORS; do not set Access-Control-* in Nginx or manually
 app.use(cors({
-  origin: allowedOrigins,
+  origin: corsOriginDelegate,
   credentials: true,
 }));
 
@@ -190,7 +216,7 @@ logInfo('Server', 'Auth and user routes registered', {
  */
 const io = new Server(server, {
   cors: {
-    origin: corsAllowAll ? '*' : allowedOrigins,
+    origin: corsOriginDelegate,
     methods: ['GET', 'POST'],
     credentials: true,
   },
@@ -236,7 +262,7 @@ initDB()
   `);
   logInfo('Server', 'Server started successfully', {
     port: PORT,
-    corsOrigin: allowedOrigins === true ? '*' : allowedOrigins.join(','),
+    corsOrigin: corsAllowAll ? '*' : configuredOrigins.join(','),
     healthCheck: `http://localhost:${PORT}/health`,
     apiDocs: `http://localhost:${PORT}/api-docs`
   });
