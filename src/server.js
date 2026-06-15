@@ -89,8 +89,13 @@ function isAllowedOrigin(origin) {
 
 function corsOriginDelegate(origin, callback) {
   // Non-browser requests may not send Origin header.
-  if (!origin) return callback(null, true);
-  if (corsAllowAll || isAllowedOrigin(origin)) return callback(null, true);
+  if (!origin) {
+    return callback(null, true);
+  }
+  const allowed = corsAllowAll || isAllowedOrigin(origin);
+  if (allowed) {
+    return callback(null, true);
+  }
   return callback(new Error('Not allowed by CORS'));
 }
 initModels();
