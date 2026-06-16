@@ -1414,6 +1414,17 @@ export const initializeSocket = (io) => {
         role
       });
 
+      // Browser/WebRTC stacks may emit terminal candidate callbacks with null payload.
+      // Ignore these instead of surfacing a validation error to clients.
+      if (!candidate || (typeof candidate === 'object' && !candidate.candidate)) {
+        logDebug('WebRTC', 'Ignoring terminal ICE candidate event', {
+          fromId: clientId,
+          targetId,
+          role
+        });
+        return;
+      }
+
       // Guard: Required fields
       if (!validateOrError(socket, targetId && candidate, ERROR_CODES.SIGNALING_MISSING_DATA,
           'Invalid ice-candidate: targetId and candidate are required')) {

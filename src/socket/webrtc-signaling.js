@@ -44,12 +44,21 @@ export function forwardWebRtcSignaling({
   userId,
   appUser,
 }) {
-  const payloadKey = type;
-  const payload = data?.[payloadKey];
+  const payloadKey = type === 'ice-candidate' ? 'candidate' : type;
+  const payload =
+    data?.[payloadKey] ??
+    (type === 'ice-candidate' ? data?.iceCandidate : undefined);
   const { targetId } = data || {};
   const signalingMode = data?.signalingMode || (isObserverSignaling(socket, data) ? SIGNALING_MODES.OBSERVER : SIGNALING_MODES.MONITOR);
 
   logDebug('WebRTC', `${type} received`, { fromId: clientId, targetId, role, signalingMode });
+
+  // WebRTC may emit terminal ICE callbacks without a candidate payload.
+  // Do not treat that as an invalid request.
+  if (type === 'ice-candidate' && (!payload || (typeof payload === 'object' && !payload.candidate))) {
+    logDebug('WebRTC', 'Ignoring terminal ICE candidate event', { fromId: clientId, targetId, signalingMode });
+    return { forwarded: false, ignored: true };
+  }
 
   if (!validateOrError(socket, targetId && payload, ERROR_CODES.SIGNALING_MISSING_DATA,
     `Invalid ${type}: targetId and ${type} are required`)) {
