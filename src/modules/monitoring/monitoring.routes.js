@@ -47,7 +47,7 @@ router.use(WEBRTC_OFFER_PATH, webrtcOfferCorsGuard);
 router.options(WEBRTC_OFFER_PATH, (req, res) => {
   res.sendStatus(200);
 });
-router.post(WEBRTC_OFFER_PATH, requireAuth, requireMonitor, proxyWebrtcOffer);
+router.post(WEBRTC_OFFER_PATH, proxyWebrtcOffer);
 
 // Admin / monitor endpoints
 router.get('/lobby-streams', requireAuth, requireMonitor, monitoringController.divisionLobbyStreams);

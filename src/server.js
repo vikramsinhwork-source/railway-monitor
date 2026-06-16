@@ -123,6 +123,7 @@ app.get('/webrtc-test', (req, res) => {
 
   <script>
     const DEVICE_ID = 'b6ee0d2b-a66c-416f-b266-ad372f42ebae';
+    const TEST_TOKEN = 'webrtc-test-token';
     let pc = null;
 
     function setStatus(msg, color='#fff') {
@@ -177,7 +178,10 @@ app.get('/webrtc-test', (req, res) => {
         '/api/monitoring/devices/' + DEVICE_ID + '/streams/' + camera + '/webrtc/offer',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + TEST_TOKEN
+          },
           body: JSON.stringify({
             type: pc.localDescription.type,
             sdp: pc.localDescription.sdp

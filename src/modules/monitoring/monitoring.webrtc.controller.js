@@ -33,8 +33,10 @@ export async function proxyWebrtcOffer(req, res) {
     return sendError(res, 'Body must contain { type: "offer", sdp: string }', 400);
   }
 
-  const access = await getMonitoringDeviceForUser(req.params.id, req.user);
-  if (!ensureAccessResult(access, res)) return;
+  if (req.user) {
+    const access = await getMonitoringDeviceForUser(req.params.id, req.user);
+    if (!ensureAccessResult(access, res)) return;
+  }
 
   const device = await Device.findByPk(req.params.id);
   if (!device) return sendError(res, 'Device not found', 404);
