@@ -7,6 +7,7 @@ function createMockRes() {
   return {
     statusCode: 200,
     body: null,
+    setHeader() {},
     status(code) {
       this.statusCode = code;
       return this;
