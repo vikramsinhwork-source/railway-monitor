@@ -73,7 +73,12 @@ export function proxyOfferViaSocket(io, deviceId, streamName, sdp, timeoutMs = D
             return reject(socketErr);
           }
 
-          const answer = responses?.find((item) => item?.sdp) || responses?.[0];
+          const answer = responses?.find((item) => item?.sdp && !item?.error) || responses?.[0];
+          if (answer?.error) {
+            const relayErr = new Error(answer.error);
+            relayErr.code = 'SOCKET_RELAY_ERROR';
+            return reject(relayErr);
+          }
           if (!answer?.sdp || answer?.type !== 'answer') {
             const invalidErr = new Error('Pi agent returned invalid WebRTC answer');
             invalidErr.code = 'INVALID_SOCKET_ANSWER';

@@ -96,6 +96,37 @@ export async function proxyWebrtcOffer(req, res) {
   }, 'post-fix');
 
   let lastError = null;
+
+  if (agentOnline && isPrivateIp(device.ip_address)) {
+    try {
+      const io = req.app?.get?.('io');
+      const answer = await proxyOfferViaSocket(io, device.id, req.params.streamName, sdp);
+      debugLog('H3', 'monitoring.webrtc.controller.js:proxyWebrtcOffer:socket-success', 'go2rtc answered via socket relay', {
+        deviceId: device.id,
+        streamName: req.params.streamName,
+        totalElapsedMs: Date.now() - startedAt,
+      }, 'post-fix');
+      return res.json({
+        success: true,
+        data: {
+          type: answer.type,
+          sdp: answer.sdp,
+          ice_servers: DEFAULT_ICE_SERVERS,
+        },
+      });
+    } catch (err) {
+      lastError = err;
+      debugLog('H3', 'monitoring.webrtc.controller.js:proxyWebrtcOffer:socket-fail', 'socket relay failed (private ip fast path)', {
+        deviceId: device.id,
+        streamName: req.params.streamName,
+        errName: err?.name,
+        errCode: err?.code,
+        errMessage: err?.message,
+        elapsedMs: Date.now() - startedAt,
+      }, 'post-fix');
+    }
+  }
+
   for (const host of hosts) {
     const hostStartedAt = Date.now();
     try {
