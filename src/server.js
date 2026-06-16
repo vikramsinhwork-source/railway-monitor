@@ -90,6 +90,128 @@ app.options('*', cors());
 
 app.use(express.json());
 
+app.get('/webrtc-test', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <title>RailWatch WebRTC Test</title>
+  <style>
+    body { font-family: sans-serif; background: #111; color: #fff; padding: 20px; }
+    video { width: 640px; height: 480px; background: #000; border: 2px solid #333; }
+    button { padding: 10px 20px; margin: 5px; cursor: pointer; font-size: 16px; }
+    #status { margin: 10px 0; padding: 10px; background: #222; border-radius: 4px; }
+    select { padding: 8px; font-size: 16px; margin: 5px; }
+  </style>
+</head>
+<body>
+  <h2>🎥 RailWatch WebRTC Test</h2>
+  
+  <div>
+    <select id="camera">
+      <option value="camera1">Camera 1</option>
+      <option value="camera2">Camera 2</option>
+      <option value="camera3">Camera 3</option>
+      <option value="camera4">Camera 4</option>
+      <option value="camera5">Camera 5</option>
+    </select>
+    <button onclick="connect()">▶ Connect</button>
+    <button onclick="disconnect()">⏹ Disconnect</button>
+  </div>
+
+  <div id="status">Status: idle</div>
+  <video id="video" autoplay playsinline muted></video>
+
+  <script>
+    const DEVICE_ID = 'b6ee0d2b-a66c-416f-b266-ad372f42ebae';
+    let pc = null;
+
+    function setStatus(msg, color='#fff') {
+      const el = document.getElementById('status');
+      el.textContent = 'Status: ' + msg;
+      el.style.color = color;
+      console.log('[webrtc]', msg);
+    }
+
+    async function connect() {
+      disconnect();
+      const camera = document.getElementById('camera').value;
+      setStatus('Fetching ICE config...', '#ffd700');
+
+      // Step 1: Get ICE/TURN config
+      const iceRes = await fetch('/api/monitoring/ice-config');
+      const iceData = await iceRes.json();
+      const iceServers = iceData.data.ice_servers;
+      setStatus('Creating peer connection...', '#ffd700');
+
+      // Step 2: Create WebRTC peer connection
+      pc = new RTCPeerConnection({ iceServers, sdpSemantics: 'unified-plan' });
+      pc.addTransceiver('video', { direction: 'recvonly' });
+
+      pc.oniceconnectionstatechange = () => {
+        setStatus('ICE: ' + pc.iceConnectionState,
+          pc.iceConnectionState === 'connected' ? '#00ff00' : '#ffd700');
+      };
+
+      pc.ontrack = (e) => {
+        setStatus('✅ Video connected!', '#00ff00');
+        document.getElementById('video').srcObject = e.streams[0];
+      };
+
+      // Step 3: Create offer
+      setStatus('Creating offer...', '#ffd700');
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Wait for ICE gathering
+      await new Promise(resolve => {
+        if (pc.iceGatheringState === 'complete') return resolve();
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') resolve();
+        };
+        setTimeout(resolve, 3000);
+      });
+
+      // Step 4: Send offer to Railway → Pi → go2rtc
+      setStatus('Sending offer to Pi via Railway...', '#ffd700');
+      const offerRes = await fetch(
+        '/api/monitoring/devices/' + DEVICE_ID + '/streams/' + camera + '/webrtc/offer',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: pc.localDescription.type,
+            sdp: pc.localDescription.sdp
+          })
+        }
+      );
+
+      if (!offerRes.ok) {
+        setStatus('❌ Offer failed: ' + offerRes.status, '#ff4444');
+        return;
+      }
+
+      const answer = await offerRes.json();
+      setStatus('Got answer, connecting...', '#ffd700');
+
+      // Step 5: Set answer
+      await pc.setRemoteDescription({
+        type: answer.data.type,
+        sdp: answer.data.sdp
+      });
+
+      setStatus('Waiting for video...', '#ffd700');
+    }
+
+    function disconnect() {
+      if (pc) { pc.close(); pc = null; }
+      document.getElementById('video').srcObject = null;
+      setStatus('Disconnected', '#888');
+    }
+  </script>
+</body>
+</html>`);
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   logInfo('Server', 'Health check requested', { ip: req.ip });
