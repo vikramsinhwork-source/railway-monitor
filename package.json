@@ -39,7 +39,8 @@
     "sequelize": "^6.37.0",
     "socket.io": "^4.7.2",
     "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.0"
+    "swagger-ui-express": "^5.0.0",
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "sequelize-cli": "^6.6.2",

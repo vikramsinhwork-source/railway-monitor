@@ -84,7 +84,7 @@ describe('E2E — Monitoring WebRTC signaling', { skip: process.env.SKIP_SOCKET_
     assert.strictEqual(res.status, 400, JSON.stringify(res.data));
   });
 
-  test('POST /webrtc/offer returns 503 when Pi IP is unavailable', async () => {
+  test('POST /webrtc/offer returns 503 when device is offline', async () => {
     const device = await createRaspberryDevice(adminToken);
 
     const res = await rest(
