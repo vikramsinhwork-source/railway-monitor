@@ -20,6 +20,10 @@ const StreamSession = sequelize.define(
       type: DataTypes.ENUM('KIOSK', 'CCTV'),
       allowNull: false,
     },
+    stream_name: {
+      type: DataTypes.STRING(64),
+      allowNull: true,
+    },
     viewer_user_id: {
       type: DataTypes.UUID,
       allowNull: false,

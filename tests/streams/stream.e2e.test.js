@@ -52,10 +52,12 @@ async function connectViewer(monitorToken) {
   return viewer;
 }
 
-async function requestStreamViaSocket(viewer, agent, deviceId, streamType) {
+async function requestStreamViaSocket(viewer, agent, deviceId, streamType, streamName = null) {
   const requestedPromise = once(viewer, 'stream-requested', 10000);
   const startPromise = once(agent, 'start-stream', 10000);
-  viewer.emit('request-stream', { deviceId, streamType });
+  const payload = { deviceId, streamType };
+  if (streamName) payload.streamName = streamName;
+  viewer.emit('request-stream', payload);
   const [requested, startStream] = await Promise.all([requestedPromise, startPromise]);
   return { requested, startStream };
 }
@@ -105,15 +107,77 @@ describe(
       assert.strictEqual(res.data.data.session.status, 'REQUESTED');
     });
 
+    test('request stream via REST forwards streamName in start-stream', async () => {
+      const device = await createRaspberryDevice(adminToken);
+      const agent = await connectAgent(device.id);
+      const startPromise = once(agent, 'start-stream', 10000);
+      const res = await rest('/api/streams/request', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${monitorToken}` },
+        body: JSON.stringify({
+          deviceId: device.id,
+          streamType: 'CCTV',
+          streamName: 'camera1',
+        }),
+      });
+      assert.strictEqual(res.status, 201, JSON.stringify(res.data));
+      const startStream = await startPromise;
+      assert.strictEqual(startStream.streamName, 'camera1');
+      await disconnectQuietly(agent);
+    });
+
     test('create session via socket request-stream', async () => {
       const device = await createRaspberryDevice(adminToken);
       const agent = await connectAgent(device.id);
       const viewer = await connectViewer(monitorToken);
 
-      const { requested, startStream } = await requestStreamViaSocket(viewer, agent, device.id, 'CCTV');
+      const { requested, startStream } = await requestStreamViaSocket(
+        viewer,
+        agent,
+        device.id,
+        'CCTV',
+        'camera2',
+      );
       assert.ok(requested.sessionId);
       assert.strictEqual(startStream.sessionId, requested.sessionId);
       assert.strictEqual(startStream.streamType, 'CCTV');
+      assert.strictEqual(startStream.streamName, 'camera2');
+
+      await disconnectQuietly(viewer);
+      await disconnectQuietly(agent);
+    });
+
+    test('allows concurrent CCTV sessions for different stream names on same device', async () => {
+      const device = await createRaspberryDevice(adminToken);
+      const agent = await connectAgent(device.id);
+      const viewer = await connectViewer(monitorToken);
+
+      const first = await requestStreamViaSocket(viewer, agent, device.id, 'CCTV', 'camera1');
+      const second = await requestStreamViaSocket(viewer, agent, device.id, 'CCTV', 'camera2');
+
+      assert.notStrictEqual(first.requested.sessionId, second.requested.sessionId);
+      assert.strictEqual(first.startStream.streamName, 'camera1');
+      assert.strictEqual(second.startStream.streamName, 'camera2');
+
+      await disconnectQuietly(viewer);
+      await disconnectQuietly(agent);
+    });
+
+    test('rejects duplicate active session for same stream name', async () => {
+      const device = await createRaspberryDevice(adminToken);
+      const agent = await connectAgent(device.id);
+      const viewer = await connectViewer(monitorToken);
+
+      await requestStreamViaSocket(viewer, agent, device.id, 'CCTV', 'camera1');
+
+      const conflictPromise = once(viewer, 'error', 10000);
+      viewer.emit('request-stream', {
+        deviceId: device.id,
+        streamType: 'CCTV',
+        streamName: 'camera1',
+      });
+      const conflict = await conflictPromise;
+      assert.ok(conflict.message?.includes('already exists') || conflict.code === 'INVALID_REQUEST');
 
       await disconnectQuietly(viewer);
       await disconnectQuietly(agent);
@@ -156,19 +220,19 @@ describe(
       assert.strictEqual(get.data.data.session.status, 'CLOSED');
     });
 
-    test('offer forwarding from agent to viewer', async () => {
+    test('viewer-offer forwarded to agent as agent-offer', async () => {
       const device = await createRaspberryDevice(adminToken);
       const agent = await connectAgent(device.id);
       const viewer = await connectViewer(monitorToken);
 
       const { requested } = await requestStreamViaSocket(viewer, agent, device.id, 'KIOSK');
 
-      const offer = { type: 'offer', sdp: 'v=0 fake-offer-sdp' };
-      const offerPromise = once(viewer, 'stream-offer', 10000);
-      agent.emit('stream-offer', { sessionId: requested.sessionId, offer });
-      await once(agent, 'stream-offer-ack', 10000);
+      const offer = { type: 'offer', sdp: 'v=0 fake-viewer-offer-sdp' };
+      const agentOfferPromise = once(agent, 'agent-offer', 10000);
+      viewer.emit('viewer-offer', { sessionId: requested.sessionId, offer });
+      await once(viewer, 'viewer-offer-ack', 10000);
 
-      const forwarded = await offerPromise;
+      const forwarded = await agentOfferPromise;
       assert.strictEqual(forwarded.sessionId, requested.sessionId);
       assert.strictEqual(forwarded.offer.sdp, offer.sdp);
 
@@ -176,26 +240,24 @@ describe(
       await disconnectQuietly(agent);
     });
 
-    test('answer forwarding from viewer to agent', async () => {
+    test('agent-answer forwarded to viewer as viewer-answer', async () => {
       const device = await createRaspberryDevice(adminToken);
       const agent = await connectAgent(device.id);
       const viewer = await connectViewer(monitorToken);
 
       const { requested } = await requestStreamViaSocket(viewer, agent, device.id, 'KIOSK');
 
-      const offerPromise = once(viewer, 'stream-offer', 10000);
-      agent.emit('stream-offer', {
-        sessionId: requested.sessionId,
-        offer: { type: 'offer', sdp: 'v=0 offer' },
-      });
-      await offerPromise;
+      const offer = { type: 'offer', sdp: 'v=0 viewer-offer' };
+      const agentOfferPromise = once(agent, 'agent-offer', 10000);
+      viewer.emit('viewer-offer', { sessionId: requested.sessionId, offer });
+      await agentOfferPromise;
 
-      const answer = { type: 'answer', sdp: 'v=0 fake-answer-sdp' };
-      const answerPromise = once(agent, 'stream-answer', 10000);
-      viewer.emit('stream-answer', { sessionId: requested.sessionId, answer });
-      await once(viewer, 'stream-answer-ack', 10000);
+      const answer = { type: 'answer', sdp: 'v=0 fake-go2rtc-answer-sdp' };
+      const viewerAnswerPromise = once(viewer, 'viewer-answer', 10000);
+      agent.emit('agent-answer', { sessionId: requested.sessionId, answer });
+      await once(agent, 'agent-answer-ack', 10000);
 
-      const forwarded = await answerPromise;
+      const forwarded = await viewerAnswerPromise;
       assert.strictEqual(forwarded.sessionId, requested.sessionId);
       assert.strictEqual(forwarded.answer.sdp, answer.sdp);
 
@@ -211,18 +273,48 @@ describe(
       const { requested } = await requestStreamViaSocket(viewer, agent, device.id, 'KIOSK');
 
       const viewerCandidate = { candidate: 'viewer-candidate-1', sdpMid: '0', sdpMLineIndex: 0 };
-      const toAgentPromise = once(agent, 'viewer-ice-candidate', 10000);
-      viewer.emit('viewer-ice-candidate', { sessionId: requested.sessionId, candidate: viewerCandidate });
+      const toAgentPromise = once(agent, 'agent-ice', 10000);
+      viewer.emit('viewer-ice', { sessionId: requested.sessionId, candidate: viewerCandidate });
       const toAgent = await toAgentPromise;
       assert.strictEqual(toAgent.candidate.candidate, viewerCandidate.candidate);
 
       const agentCandidate = { candidate: 'agent-candidate-1', sdpMid: '0', sdpMLineIndex: 0 };
-      const toViewerPromise = once(viewer, 'agent-ice-candidate', 10000);
-      agent.emit('agent-ice-candidate', { sessionId: requested.sessionId, candidate: agentCandidate });
+      const toViewerPromise = once(viewer, 'viewer-ice', 10000);
+      agent.emit('agent-ice', { sessionId: requested.sessionId, candidate: agentCandidate });
       const toViewer = await toViewerPromise;
       assert.strictEqual(toViewer.candidate.candidate, agentCandidate.candidate);
 
       await disconnectQuietly(viewer);
+      await disconnectQuietly(agent);
+    });
+
+    test('join-stream-session replays viewer-answer when session.answer exists', async () => {
+      const device = await createRaspberryDevice(adminToken);
+      const agent = await connectAgent(device.id);
+      const viewer = await connectViewer(monitorToken);
+
+      const { requested } = await requestStreamViaSocket(viewer, agent, device.id, 'KIOSK');
+
+      viewer.emit('viewer-offer', {
+        sessionId: requested.sessionId,
+        offer: { type: 'offer', sdp: 'v=0 offer' },
+      });
+      await once(agent, 'agent-offer', 10000);
+
+      const answer = { type: 'answer', sdp: 'v=0 stored-answer' };
+      agent.emit('agent-answer', { sessionId: requested.sessionId, answer });
+      await once(viewer, 'viewer-answer', 10000);
+
+      await disconnectQuietly(viewer);
+
+      const viewer2 = await connectViewer(monitorToken);
+      const replayPromise = once(viewer2, 'viewer-answer', 10000);
+      viewer2.emit('join-stream-session', { sessionId: requested.sessionId });
+      await once(viewer2, 'stream-session-joined', 10000);
+      const replay = await replayPromise;
+      assert.strictEqual(replay.answer.sdp, answer.sdp);
+
+      await disconnectQuietly(viewer2);
       await disconnectQuietly(agent);
     });
 

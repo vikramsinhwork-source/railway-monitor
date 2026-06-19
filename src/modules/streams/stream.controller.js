@@ -19,6 +19,7 @@ export async function request(req, res) {
       user: req.user,
       deviceId: validation.value.deviceId,
       streamType: validation.value.streamType,
+      streamName: validation.value.streamName,
       io,
     });
 
