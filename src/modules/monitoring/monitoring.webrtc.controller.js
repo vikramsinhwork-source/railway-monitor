@@ -4,6 +4,8 @@ import Device from '../divisions/device.model.js';
 import { getMonitoringDeviceForUser } from './monitoring.service.js';
 
 const DEFAULT_GO2RTC_PORT = Number(process.env.GO2RTC_PORT || 1984);
+/** Pi → go2rtc cold start can take 15–25s; allow env override. */
+const WEBRTC_OFFER_TIMEOUT_MS = Number(process.env.GO2RTC_SOCKET_TIMEOUT_MS || 45000);
 const DEFAULT_ICE_SERVERS = [
   { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
 ];
@@ -60,7 +62,7 @@ export async function proxyWebrtcOffer(req, res) {
     const timeout = setTimeout(() => {
       pendingOffers.delete(requestId);
       reject(new Error('Pi did not respond in time'));
-    }, 10000);
+    }, WEBRTC_OFFER_TIMEOUT_MS);
     pendingOffers.set(requestId, { resolve, reject, timeout });
   });
 

@@ -1,7 +1,7 @@
 import SocketPresence from '../realtime/socketPresence.model.js';
 
 const DEFAULT_PER_HOST_TIMEOUT_MS = Number(process.env.GO2RTC_FETCH_TIMEOUT_MS || 4000);
-const DEFAULT_SOCKET_TIMEOUT_MS = Number(process.env.GO2RTC_SOCKET_TIMEOUT_MS || 10000);
+const DEFAULT_SOCKET_TIMEOUT_MS = Number(process.env.GO2RTC_SOCKET_TIMEOUT_MS || 45000);
 
 const PRIVATE_IP_REGEX = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.)/;
 
