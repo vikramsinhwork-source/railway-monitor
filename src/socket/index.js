@@ -2514,7 +2514,7 @@ export const initializeSocket = (io) => {
 
           // End any active sessions for this kiosk (only relevant when this socket owned the kiosk)
           const endedSession = thisSocketOwnsKiosk ? sessionsState.endSessionByKiosk(clientId) : null;
-          if (thisSocketOwnsKiosk && endedSession) {
+          if (thisSocketOwnsKiosk && endedSession && isUuid(clientId)) {
             await endMonitoringSession({
               deviceId: clientId,
               actorUserId: userId,

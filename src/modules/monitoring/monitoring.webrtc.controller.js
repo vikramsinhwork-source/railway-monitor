@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { sendError } from '../../utils/apiResponse.js';
 import Device from '../divisions/device.model.js';
 import { getMonitoringDeviceForUser } from './monitoring.service.js';
@@ -46,7 +46,7 @@ export async function proxyWebrtcOffer(req, res) {
 
   const deviceId = req.params.id;
   const streamName = req.params.streamName;
-  const requestId = uuidv4();
+  const requestId = randomUUID();
 
   const io = req.app.get('io');
   const room = `device:${deviceId}`;

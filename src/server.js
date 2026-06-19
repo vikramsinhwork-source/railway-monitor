@@ -195,6 +195,14 @@ app.get('/webrtc-test', (req, res) => {
       }
 
       const answer = await offerRes.json();
+      if (!answer.success || answer.data?.error) {
+        setStatus('❌ Pi/go2rtc error: ' + (answer.data?.error || answer.message || 'unknown'), '#ff4444');
+        return;
+      }
+      if (!answer.data?.sdp) {
+        setStatus('❌ Empty SDP answer from Pi/go2rtc', '#ff4444');
+        return;
+      }
       setStatus('Got answer, connecting...', '#ffd700');
 
       // Step 5: Set answer

@@ -308,6 +308,11 @@ export async function endMonitoringSession({
   disconnectReason = null,
   force = false,
 }) {
+  if (!isUuid(deviceId)) {
+    logWarn('Realtime', 'Skipping endMonitoringSession — invalid deviceId (not a UUID)', { deviceId });
+    return { ok: false, code: 'INVALID_DEVICE_ID', message: 'deviceId must be a UUID' };
+  }
+
   const active = await MonitoringSession.findOne({
     where: { device_id: deviceId, status: 'ACTIVE' },
     order: [['started_at', 'DESC']],
