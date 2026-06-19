@@ -118,6 +118,9 @@ app.get('/webrtc-test', (req, res) => {
     </select>
     <button onclick="connect()">▶ Connect</button>
     <button onclick="disconnect()">⏹ Disconnect</button>
+    <label style="margin-left:12px;font-size:14px">
+      <input type="checkbox" id="h264Only" checked> H264-only offer
+    </label>
   </div>
 
   <div id="status">Status: idle</div>
@@ -142,7 +145,59 @@ app.get('/webrtc-test', (req, res) => {
       document.getElementById('stats').textContent = msg;
     }
 
-    function sdpCodecSummary(sdp) {
+    function preferH264Only(transceiver) {
+      if (!document.getElementById('h264Only').checked) return;
+      if (!window.RTCRtpReceiver || !RTCRtpReceiver.getCapabilities) return;
+      try {
+        var caps = RTCRtpReceiver.getCapabilities('video');
+        var h264 = caps.codecs.filter(function(c) {
+          return (c.mimeType || '').toLowerCase() === 'video/h264';
+        });
+        if (h264.length && transceiver.setCodecPreferences) {
+          transceiver.setCodecPreferences(h264);
+          console.log('[webrtc] setCodecPreferences: H264-only (' + h264.length + ' profiles)');
+        }
+      } catch (e) {
+        console.warn('[webrtc] setCodecPreferences failed', e);
+      }
+    }
+
+    function filterOfferToH264(sdp) {
+      if (!document.getElementById('h264Only').checked || !sdp) return sdp;
+      var eol = sdp.indexOf('\\r\\n') >= 0 ? '\\r\\n' : '\\n';
+      var lines = sdp.split(/\\r\\n|\\n/);
+      var h264Pts = {};
+      lines.forEach(function(line) {
+        var m = line.match(/^a=rtpmap:(\\d+) H264\\//i);
+        if (m) h264Pts[m[1]] = true;
+      });
+      lines.forEach(function(line) {
+        var apt = line.match(/^a=fmtp:(\\d+) apt=(\\d+)/);
+        if (apt && h264Pts[apt[2]]) h264Pts[apt[1]] = true;
+      });
+      var out = [];
+      var inVideo = false;
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.indexOf('m=video') === 0) {
+          inVideo = true;
+          var parts = line.split(' ');
+          var kept = parts.slice(3).filter(function(pt) { return h264Pts[pt]; });
+          out.push(parts.slice(0, 3).concat(kept).join(' '));
+          continue;
+        }
+        if (line.indexOf('m=') === 0) inVideo = false;
+        if (inVideo) {
+          var pm = line.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\\d+)/);
+          if (pm && !h264Pts[pm[1]]) continue;
+        }
+        out.push(line);
+      }
+      var filtered = out.join(eol) + eol;
+      console.log('[webrtc] offer SDP stripped to H264 payload types:', Object.keys(h264Pts).join(','));
+      return filtered;
+    }
+
       if (!sdp) return '(no sdp)';
       const codecs = [];
       sdp.split(/\\r\\n|\\n/).forEach(function(line) {
@@ -251,7 +306,8 @@ app.get('/webrtc-test', (req, res) => {
       setStatus('Creating peer connection...', '#ffd700');
 
       pc = new RTCPeerConnection({ iceServers: iceServers, sdpSemantics: 'unified-plan' });
-      pc.addTransceiver('video', { direction: 'recvonly' });
+      var videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+      preferH264Only(videoTransceiver);
 
       pc.oniceconnectionstatechange = function() {
         setStatus('ICE: ' + pc.iceConnectionState, pc.iceConnectionState === 'connected' ? '#00ff00' : '#ffd700');
@@ -285,6 +341,9 @@ app.get('/webrtc-test', (req, res) => {
 
       setStatus('Creating offer...', '#ffd700');
       var offer = await pc.createOffer();
+      if (document.getElementById('h264Only').checked) {
+        offer.sdp = filterOfferToH264(offer.sdp);
+      }
       await pc.setLocalDescription(offer);
       console.log('[webrtc] local offer codecs:', sdpCodecSummary(pc.localDescription.sdp));
 
