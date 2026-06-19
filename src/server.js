@@ -99,13 +99,15 @@ app.get('/webrtc-test', (req, res) => {
     body { font-family: sans-serif; background: #111; color: #fff; padding: 20px; }
     video { width: 640px; height: 480px; background: #000; border: 2px solid #333; }
     button { padding: 10px 20px; margin: 5px; cursor: pointer; font-size: 16px; }
-    #status { margin: 10px 0; padding: 10px; background: #222; border-radius: 4px; }
+    #status { margin: 10px 0; padding: 10px; background: #222; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px; }
     select { padding: 8px; font-size: 16px; margin: 5px; }
+    #stats { margin-top: 12px; padding: 10px; background: #1a1a1a; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 280px; overflow: auto; }
   </style>
 </head>
 <body>
   <h2>🎥 RailWatch WebRTC Test</h2>
-  
+  <p style="color:#888;font-size:14px">Open DevTools console for full media diagnostics.</p>
+
   <div>
     <select id="camera">
       <option value="camera1">Camera 1</option>
@@ -120,11 +122,14 @@ app.get('/webrtc-test', (req, res) => {
 
   <div id="status">Status: idle</div>
   <video id="video" autoplay playsinline muted></video>
+  <div id="stats">Stats: (connect to start)</div>
 
   <script>
     const DEVICE_ID = 'b6ee0d2b-a66c-416f-b266-ad372f42ebae';
     const TEST_TOKEN = 'webrtc-test-token';
     let pc = null;
+    let statsTimer = null;
+    let lastStats = { bytesReceived: 0, framesDecoded: 0, currentTime: 0 };
 
     function setStatus(msg, color='#fff') {
       const el = document.getElementById('status');
@@ -133,48 +138,166 @@ app.get('/webrtc-test', (req, res) => {
       console.log('[webrtc]', msg);
     }
 
+    function setStats(msg) {
+      document.getElementById('stats').textContent = msg;
+    }
+
+    function sdpCodecSummary(sdp) {
+      if (!sdp) return '(no sdp)';
+      const codecs = [];
+      sdp.split(/\\r\\n|\\n/).forEach(function(line) {
+        var m = line.match(/^a=rtpmap:(\\d+) (H264|VP8|VP9|AV1|H265|HEVC)/i);
+        if (m) codecs.push(m[2] + '/' + m[1]);
+        var f = line.match(/^a=fmtp:(\\d+) .*profile-level-id=([0-9a-fA-F]+)/);
+        if (f) codecs.push('profile-level-id=' + f[2] + '@' + f[1]);
+      });
+      return codecs.length ? codecs.join(', ') : '(no video codecs parsed)';
+    }
+
+    function logVideoElementState(label) {
+      var v = document.getElementById('video');
+      console.log('[webrtc][video][' + label + ']', {
+        videoWidth: v.videoWidth,
+        videoHeight: v.videoHeight,
+        readyState: v.readyState,
+        currentTime: v.currentTime,
+        paused: v.paused,
+        muted: v.muted,
+        hasSrcObject: !!v.srcObject,
+        trackCount: v.srcObject ? v.srcObject.getVideoTracks().length : 0,
+      });
+    }
+
+    async function logReceiverCodecs() {
+      if (!pc) return;
+      try {
+        var receivers = pc.getReceivers();
+        for (var i = 0; i < receivers.length; i++) {
+          var r = receivers[i];
+          if (r.track && r.track.kind === 'video') {
+            var params = r.getParameters ? r.getParameters() : null;
+            console.log('[webrtc][receiver]', {
+              trackId: r.track.id,
+              readyState: r.track.readyState,
+              muted: r.track.muted,
+              codecs: params && params.codecs ? params.codecs : '(n/a)',
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[webrtc] getReceivers failed', e);
+      }
+    }
+
+    function startStatsLoop() {
+      stopStatsLoop();
+      statsTimer = setInterval(async function() {
+        if (!pc) return;
+        var v = document.getElementById('video');
+        var lines = [];
+        lines.push('ICE: ' + pc.iceConnectionState + ' | conn: ' + pc.connectionState);
+        lines.push('video: ' + v.videoWidth + 'x' + v.videoHeight + ' readyState=' + v.readyState + ' t=' + v.currentTime.toFixed(2));
+
+        var timeDelta = v.currentTime - lastStats.currentTime;
+        var timeStuck = pc.iceConnectionState === 'connected' && timeDelta < 0.01;
+        if (timeStuck) lines.push('⚠ currentTime not advancing — decoder may be stuck');
+
+        try {
+          var report = await pc.getStats();
+          report.forEach(function(stat) {
+            if (stat.type === 'inbound-rtp' && stat.kind === 'video') {
+              var bytesDelta = (stat.bytesReceived || 0) - lastStats.bytesReceived;
+              var framesDelta = (stat.framesDecoded || 0) - lastStats.framesDecoded;
+              lines.push('inbound-rtp: bytes=' + stat.bytesReceived + ' (+' + bytesDelta + '/2s)');
+              lines.push('  framesDecoded=' + (stat.framesDecoded ?? 'n/a') + ' (+' + framesDelta + '/2s) dropped=' + (stat.framesDropped ?? 'n/a'));
+              lines.push('  keyFrames=' + (stat.keyFramesDecoded ?? 'n/a') + ' jitter=' + (stat.jitter ?? 'n/a'));
+              lines.push('  pli=' + (stat.pliCount ?? 'n/a') + ' fir=' + (stat.firCount ?? 'n/a') + ' nack=' + (stat.nackCount ?? 'n/a'));
+              if (bytesDelta > 0 && framesDelta === 0) {
+                lines.push('⚠ bytes increasing but framesDecoded flat → likely codec/bitstream issue');
+              }
+              if (bytesDelta === 0 && pc.iceConnectionState === 'connected') {
+                lines.push('⚠ ICE connected but no RTP bytes — media path blocked');
+              }
+              if (framesDelta > 0 && (v.videoWidth === 0 || v.videoHeight === 0)) {
+                lines.push('⚠ frames decoded but video element has no dimensions');
+              }
+              lastStats.bytesReceived = stat.bytesReceived || 0;
+              lastStats.framesDecoded = stat.framesDecoded || 0;
+            }
+          });
+        } catch (e) {
+          lines.push('getStats error: ' + e.message);
+        }
+
+        lastStats.currentTime = v.currentTime;
+        setStats(lines.join('\\n'));
+        console.log('[webrtc][stats]', lines.join(' | '));
+      }, 2000);
+    }
+
+    function stopStatsLoop() {
+      if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+      lastStats = { bytesReceived: 0, framesDecoded: 0, currentTime: 0 };
+    }
+
     async function connect() {
       disconnect();
-      const camera = document.getElementById('camera').value;
+      var camera = document.getElementById('camera').value;
       setStatus('Fetching ICE config...', '#ffd700');
 
-      // Step 1: Get ICE/TURN config
-      const iceRes = await fetch('/api/monitoring/ice-config');
-      const iceData = await iceRes.json();
-      const iceServers = iceData.data.ice_servers;
+      var iceRes = await fetch('/api/monitoring/ice-config');
+      var iceData = await iceRes.json();
+      var iceServers = iceData.data.ice_servers;
       setStatus('Creating peer connection...', '#ffd700');
 
-      // Step 2: Create WebRTC peer connection
-      pc = new RTCPeerConnection({ iceServers, sdpSemantics: 'unified-plan' });
+      pc = new RTCPeerConnection({ iceServers: iceServers, sdpSemantics: 'unified-plan' });
       pc.addTransceiver('video', { direction: 'recvonly' });
 
-      pc.oniceconnectionstatechange = () => {
-        setStatus('ICE: ' + pc.iceConnectionState,
-          pc.iceConnectionState === 'connected' ? '#00ff00' : '#ffd700');
+      pc.oniceconnectionstatechange = function() {
+        setStatus('ICE: ' + pc.iceConnectionState, pc.iceConnectionState === 'connected' ? '#00ff00' : '#ffd700');
+        if (pc.iceConnectionState === 'connected') {
+          logVideoElementState('ice-connected');
+          logReceiverCodecs();
+        }
       };
 
-      pc.ontrack = (e) => {
-        setStatus('✅ Video connected!', '#00ff00');
-        document.getElementById('video').srcObject = e.streams[0];
+      pc.onconnectionstatechange = function() {
+        console.log('[webrtc] connectionState:', pc.connectionState);
       };
 
-      // Step 3: Create offer
+      pc.ontrack = function(e) {
+        console.log('[webrtc][ontrack]', {
+          kind: e.track.kind,
+          id: e.track.id,
+          readyState: e.track.readyState,
+          muted: e.track.muted,
+          streamIds: e.streams.map(function(s) { return s.id; }),
+        });
+        e.track.onmute = function() { console.warn('[webrtc] track muted', e.track.id); };
+        e.track.onunmute = function() { console.log('[webrtc] track unmuted', e.track.id); logVideoElementState('track-unmuted'); };
+        var stream = e.streams[0] || new MediaStream([e.track]);
+        document.getElementById('video').srcObject = stream;
+        var v = document.getElementById('video');
+        v.play().catch(function(err) { console.warn('[webrtc] video.play()', err); });
+        setStatus('Track received (' + e.track.kind + '), waiting for decode...', '#ffd700');
+        startStatsLoop();
+      };
+
       setStatus('Creating offer...', '#ffd700');
-      const offer = await pc.createOffer();
+      var offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      console.log('[webrtc] local offer codecs:', sdpCodecSummary(pc.localDescription.sdp));
 
-      // Wait for ICE gathering
-      await new Promise(resolve => {
+      await new Promise(function(resolve) {
         if (pc.iceGatheringState === 'complete') return resolve();
-        pc.onicegatheringstatechange = () => {
+        pc.onicegatheringstatechange = function() {
           if (pc.iceGatheringState === 'complete') resolve();
         };
-        setTimeout(resolve, 3000);
+        setTimeout(resolve, 5000);
       });
 
-      // Step 4: Send offer to Railway → Pi → go2rtc
-      setStatus('Sending offer to Pi via Railway...', '#ffd700');
-      const offerRes = await fetch(
+      setStatus('Sending offer to Pi via Railway (may take ~20s on cold start)...', '#ffd700');
+      var offerRes = await fetch(
         '/api/monitoring/devices/' + DEVICE_ID + '/streams/' + camera + '/webrtc/offer',
         {
           method: 'POST',
@@ -190,11 +313,12 @@ app.get('/webrtc-test', (req, res) => {
       );
 
       if (!offerRes.ok) {
-        setStatus('❌ Offer failed: ' + offerRes.status, '#ff4444');
+        var errText = await offerRes.text();
+        setStatus('❌ Offer failed: ' + offerRes.status + ' ' + errText.slice(0, 120), '#ff4444');
         return;
       }
 
-      const answer = await offerRes.json();
+      var answer = await offerRes.json();
       if (!answer.success || answer.data?.error) {
         setStatus('❌ Pi/go2rtc error: ' + (answer.data?.error || answer.message || 'unknown'), '#ff4444');
         return;
@@ -203,20 +327,25 @@ app.get('/webrtc-test', (req, res) => {
         setStatus('❌ Empty SDP answer from Pi/go2rtc', '#ff4444');
         return;
       }
-      setStatus('Got answer, connecting...', '#ffd700');
 
-      // Step 5: Set answer
+      console.log('[webrtc] remote answer type:', answer.data.type);
+      console.log('[webrtc] remote answer preview:', answer.data.sdp.slice(0, 200));
+      console.log('[webrtc] remote answer codecs:', sdpCodecSummary(answer.data.sdp));
+
+      setStatus('Got answer, setRemoteDescription...', '#ffd700');
       await pc.setRemoteDescription({
-        type: answer.data.type,
+        type: answer.data.type || 'answer',
         sdp: answer.data.sdp
       });
-
-      setStatus('Waiting for video...', '#ffd700');
+      logReceiverCodecs();
+      setStatus('Waiting for video (check stats panel)...', '#ffd700');
     }
 
     function disconnect() {
+      stopStatsLoop();
       if (pc) { pc.close(); pc = null; }
       document.getElementById('video').srcObject = null;
+      setStats('Stats: (disconnected)');
       setStatus('Disconnected', '#888');
     }
   </script>
