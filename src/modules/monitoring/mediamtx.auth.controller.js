@@ -24,13 +24,32 @@ function extractStreamToken(body = {}) {
   return null;
 }
 
+function isLocalhostIp(ip) {
+  if (typeof ip !== 'string') return false;
+  const trimmed = ip.trim();
+  return trimmed === '127.0.0.1' || trimmed === '::1' || trimmed === 'localhost';
+}
+
 function isReadAction(action) {
   return action === 'read' || action === 'playback';
 }
 
+const LOCALHOST_ALLOWED_ACTIONS = new Set(['read', 'playback', 'api']);
+
 export async function mediamtxAuth(req, res) {
   const body = req.body || {};
-  const { path, action, protocol } = body;
+  const { path, action, protocol, ip } = body;
+
+  if (isLocalhostIp(ip)) {
+    if (LOCALHOST_ALLOWED_ACTIONS.has(action)) {
+      return res.status(200).send('OK');
+    }
+    return res.status(403).send('Forbidden');
+  }
+
+  if (action === 'api') {
+    return res.status(403).send('Forbidden');
+  }
 
   if (protocol && protocol !== 'webrtc') {
     return res.status(403).send('Forbidden');

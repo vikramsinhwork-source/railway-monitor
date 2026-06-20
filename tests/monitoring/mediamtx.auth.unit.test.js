@@ -29,10 +29,49 @@ describe('mediamtx.auth.controller', () => {
     process.env.JWT_SECRET = originalSecret;
   });
 
-  test('rejects missing token for webrtc read', async () => {
+  test('allows localhost agent WHEP without token', async () => {
     const res = mockRes();
     await mediamtxAuth(
-      { body: { action: 'read', protocol: 'webrtc', path: 'camera1' } },
+      {
+        body: {
+          ip: '127.0.0.1',
+          action: 'read',
+          protocol: 'webrtc',
+          path: 'camera1',
+        },
+      },
+      res
+    );
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body, 'OK');
+  });
+
+  test('allows localhost MediaMTX API poll without token', async () => {
+    const res = mockRes();
+    await mediamtxAuth(
+      {
+        body: {
+          ip: '127.0.0.1',
+          action: 'api',
+          path: '',
+        },
+      },
+      res
+    );
+    assert.strictEqual(res.statusCode, 200);
+  });
+
+  test('rejects LAN webrtc read without token', async () => {
+    const res = mockRes();
+    await mediamtxAuth(
+      {
+        body: {
+          ip: '192.168.1.50',
+          action: 'read',
+          protocol: 'webrtc',
+          path: 'camera1',
+        },
+      },
       res
     );
     assert.strictEqual(res.statusCode, 401);
@@ -54,6 +93,7 @@ describe('mediamtx.auth.controller', () => {
     await mediamtxAuth(
       {
         body: {
+          ip: '192.168.1.50',
           action: 'read',
           protocol: 'webrtc',
           path: 'camera1',
@@ -82,6 +122,7 @@ describe('mediamtx.auth.controller', () => {
     await mediamtxAuth(
       {
         body: {
+          ip: '192.168.1.50',
           action: 'playback',
           protocol: 'webrtc',
           path: 'camera1',
@@ -109,6 +150,7 @@ describe('mediamtx.auth.controller', () => {
     await mediamtxAuth(
       {
         body: {
+          ip: '192.168.1.50',
           action: 'read',
           protocol: 'webrtc',
           path: 'camera1',
