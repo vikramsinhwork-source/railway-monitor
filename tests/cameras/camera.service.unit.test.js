@@ -4,6 +4,7 @@ import {
   buildDirectPiWebrtcUrl,
   buildEdgeWebrtcUrl,
   getWebrtcPlaybackMode,
+  parseLegacyCameraId,
   resolveWebrtcPlayUrl,
 } from '../../src/modules/cameras/camera.service.js';
 
@@ -57,5 +58,13 @@ describe('camera.service — WebRTC play URL', () => {
       }
     );
     assert.strictEqual(url, 'https://edge.railwatch.in/webrtc/camera3');
+  });
+
+  test('parseLegacyCameraId extracts pi device and mediamtx path', () => {
+    const parsed = parseLegacyCameraId('b6ee0d2b-a66c-416f-b266-ad372f42ebae_camera1');
+    assert.deepStrictEqual(parsed, {
+      piDeviceId: 'b6ee0d2b-a66c-416f-b266-ad372f42ebae',
+      mediamtxPath: 'camera1',
+    });
   });
 });

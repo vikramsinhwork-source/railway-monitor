@@ -3,6 +3,7 @@ import Device from '../divisions/device.model.js';
 import StreamCamera from './streamCamera.model.js';
 import { normalizeRole } from '../../middleware/rbac.middleware.js';
 import { isPiMonitoringAgent } from '../devices/device.service.js';
+import { isValidUuid } from '../devices/device.validator.js';
 
 const WATCHER_ROLES = new Set(['SUPER_ADMIN', 'DIVISION_ADMIN', 'MONITOR']);
 const EDGE_TOKEN_TTL_SEC = Number(process.env.EDGE_WEBRTC_TOKEN_TTL_SEC || 3600);
@@ -106,19 +107,41 @@ function canAccessCamera(user, camera) {
 }
 
 export async function resolveCameraById(cameraId) {
-  const byPk = await StreamCamera.findByPk(cameraId);
-  if (byPk) return byPk;
-
+  const startedAt = Date.now();
   const legacy = parseLegacyCameraId(cameraId);
-  if (!legacy) return null;
 
-  return StreamCamera.findOne({
-    where: {
-      pi_device_id: legacy.piDeviceId,
-      mediamtx_path: legacy.mediamtxPath,
-      is_active: true,
-    },
-  });
+  // #region agent log
+  fetch('http://127.0.0.1:7723/ingest/c3f6f3f5-4f84-44d8-98d6-32d5cc24da4f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'66c12d'},body:JSON.stringify({sessionId:'66c12d',location:'camera.service.js:resolveCameraById',message:'resolveCameraById entry',data:{cameraIdSuffix:cameraId?.slice?.(-12),isValidUuid:isValidUuid(cameraId),hasLegacy:!!legacy},timestamp:Date.now(),hypothesisId:'A',runId:'pre-fix'})}).catch(()=>{});
+  // #endregion
+
+  if (legacy) {
+    const byLegacy = await StreamCamera.findOne({
+      where: {
+        pi_device_id: legacy.piDeviceId,
+        mediamtx_path: legacy.mediamtxPath,
+        is_active: true,
+      },
+    });
+    if (byLegacy) {
+      // #region agent log
+      fetch('http://127.0.0.1:7723/ingest/c3f6f3f5-4f84-44d8-98d6-32d5cc24da4f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'66c12d'},body:JSON.stringify({sessionId:'66c12d',location:'camera.service.js:resolveCameraById',message:'resolved via legacy lookup',data:{elapsedMs:Date.now()-startedAt,cameraPkSuffix:byLegacy.id?.slice?.(-8)},timestamp:Date.now(),hypothesisId:'A',runId:'pre-fix'})}).catch(()=>{});
+      // #endregion
+      return byLegacy;
+    }
+  }
+
+  if (!isValidUuid(cameraId)) {
+    // #region agent log
+    fetch('http://127.0.0.1:7723/ingest/c3f6f3f5-4f84-44d8-98d6-32d5cc24da4f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'66c12d'},body:JSON.stringify({sessionId:'66c12d',location:'camera.service.js:resolveCameraById',message:'skipped invalid UUID pk lookup',data:{elapsedMs:Date.now()-startedAt},timestamp:Date.now(),hypothesisId:'A',runId:'pre-fix'})}).catch(()=>{});
+    // #endregion
+    return null;
+  }
+
+  const byPk = await StreamCamera.findByPk(cameraId);
+  // #region agent log
+  fetch('http://127.0.0.1:7723/ingest/c3f6f3f5-4f84-44d8-98d6-32d5cc24da4f',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'66c12d'},body:JSON.stringify({sessionId:'66c12d',location:'camera.service.js:resolveCameraById',message:'pk lookup complete',data:{elapsedMs:Date.now()-startedAt,found:!!byPk},timestamp:Date.now(),hypothesisId:'A',runId:'pre-fix'})}).catch(()=>{});
+  // #endregion
+  return byPk;
 }
 
 function maybeSignEdgeToken(camera, user) {
