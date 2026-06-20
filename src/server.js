@@ -19,11 +19,10 @@ import lobbyRoutes from './modules/lobbies/lobby.route.js';
 import deviceRoutes from './modules/devices/device.route.js';
 import agentRoutes from './modules/agents/agent.route.js';
 import monitoringRoutes from './modules/monitoring/monitoring.routes.js';
-import streamRoutes from './modules/streams/stream.route.js';
+import cameraRoutes from './modules/cameras/camera.routes.js';
 import healthRoutes from './modules/health/health.routes.js';
 import analyticsRoutes from './modules/analytics/analytics.routes.js';
 import { startDeviceHealthScheduler } from './services/deviceHealth.scheduler.js';
-import { startStreamIdleCleanup } from './modules/streams/stream.service.js';
 import { ensureCollection } from './services/rekognitionFace.js';
 import faceRoutes from './modules/face/face.routes.js';
 
@@ -90,329 +89,40 @@ app.options('*', cors());
 
 app.use(express.json());
 
-app.get('/webrtc-test', (req, res) => {
+app.get('/mediamtx-test', (req, res) => {
+  const defaultPiIp = process.env.MEDIAMTX_TEST_PI_IP || '192.168.1.10';
+  const defaultPort = process.env.MEDIAMTX_WEBRTC_PORT || '8889';
+  const defaultScheme = process.env.MEDIAMTX_WEBRTC_SCHEME || 'http';
   res.send(`<!DOCTYPE html>
 <html>
 <head>
-  <title>RailWatch WebRTC Test</title>
+  <title>RailWatch MediaMTX Test</title>
   <style>
     body { font-family: sans-serif; background: #111; color: #fff; padding: 20px; }
-    video { width: 640px; height: 480px; background: #000; border: 2px solid #333; }
-    button { padding: 10px 20px; margin: 5px; cursor: pointer; font-size: 16px; }
-    #status { margin: 10px 0; padding: 10px; background: #222; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px; }
-    select { padding: 8px; font-size: 16px; margin: 5px; }
-    #stats { margin-top: 12px; padding: 10px; background: #1a1a1a; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 280px; overflow: auto; }
+    iframe { width: 960px; height: 540px; border: 2px solid #333; background: #000; }
+    input, button { margin: 8px 4px; padding: 8px 12px; }
+    .hint { color: #888; font-size: 14px; max-width: 720px; }
   </style>
 </head>
 <body>
-  <h2>🎥 RailWatch WebRTC Test</h2>
-  <p style="color:#888;font-size:14px">Open DevTools console for diagnostics. Also compare with go2rtc UI: <code>http://PI_IP:1984</code> → Streams → WebRTC preview.</p>
-
-  <div>
-    <select id="camera">
-      <option value="camera1">Camera 1</option>
-      <option value="camera2">Camera 2</option>
-      <option value="camera3">Camera 3</option>
-      <option value="camera4">Camera 4</option>
-      <option value="camera5">Camera 5</option>
-    </select>
-    <button onclick="connect()">▶ Connect</button>
-    <button onclick="disconnect()">⏹ Disconnect</button>
-    <label style="margin-left:12px;font-size:14px">
-      <input type="checkbox" id="h264Only" checked> H264-only offer
-    </label>
-  </div>
-
-  <div id="status">Status: idle</div>
-  <video id="video" autoplay playsinline muted></video>
-  <div id="stats">Stats: (connect to start)</div>
-
+  <h1>MediaMTX browser test (direct Pi)</h1>
+  <p class="hint">Production playback uses each Pi LAN IP from <code>GET /api/cameras/:id/webrtc-url</code>.
+  Test locally by opening <code>http://&lt;pi-ip&gt;:8889/camera1/</code> or use the form below.</p>
+  <label>Pi IP: <input id="piIp" value="${defaultPiIp}" style="width:140px" /></label>
+  <label>Port: <input id="port" value="${defaultPort}" style="width:60px" /></label>
+  <label>Path: <input id="path" value="camera1" style="width:100px" /></label>
+  <button onclick="loadStream()">Load</button>
+  <p id="status" style="color:#888"></p>
+  <iframe id="player" allow="autoplay; fullscreen"></iframe>
   <script>
-    const DEVICE_ID = 'b6ee0d2b-a66c-416f-b266-ad372f42ebae';
-    const TEST_TOKEN = 'webrtc-test-token';
-    let pc = null;
-    let statsTimer = null;
-    let lastStats = {
-      bytesReceived: 0,
-      framesDecoded: 0,
-      keyFramesDecoded: 0,
-      currentTime: 0,
-      pliCount: 0,
-      nackCount: 0,
-      codecFmtp: '',
-    };
-
-    function setStatus(msg, color='#fff') {
-      const el = document.getElementById('status');
-      el.textContent = 'Status: ' + msg;
-      el.style.color = color;
-      console.log('[webrtc]', msg);
-    }
-
-    function setStats(msg) {
-      document.getElementById('stats').textContent = msg;
-    }
-
-    function preferH264Only(transceiver) {
-      if (!document.getElementById('h264Only').checked) return;
-      if (!window.RTCRtpReceiver || !RTCRtpReceiver.getCapabilities) return;
-      try {
-        var caps = RTCRtpReceiver.getCapabilities('video');
-        var h264 = caps.codecs.filter(function(c) {
-          return (c.mimeType || '').toLowerCase() === 'video/h264';
-        });
-        if (h264.length && transceiver.setCodecPreferences) {
-          transceiver.setCodecPreferences(h264);
-          console.log('[webrtc] setCodecPreferences: H264-only (' + h264.length + ' profiles)');
-        }
-      } catch (e) {
-        console.warn('[webrtc] setCodecPreferences failed', e);
-      }
-    }
-
-    function sdpCodecSummary(sdp) {
-      if (!sdp) return '(no sdp)';
-      const codecs = [];
-      sdp.split(/\\r\\n|\\n/).forEach(function(line) {
-        var m = line.match(/^a=rtpmap:(\\d+) (H264|VP8|VP9|AV1|H265|HEVC)/i);
-        if (m) codecs.push(m[2] + '/' + m[1]);
-        var f = line.match(/^a=fmtp:(\\d+) .*profile-level-id=([0-9a-fA-F]+)/);
-        if (f) codecs.push('profile-level-id=' + f[2] + '@' + f[1]);
-      });
-      return codecs.length ? codecs.join(', ') : '(no video codecs parsed)';
-    }
-
-    function logVideoElementState(label) {
-      var v = document.getElementById('video');
-      console.log('[webrtc][video][' + label + ']', {
-        videoWidth: v.videoWidth,
-        videoHeight: v.videoHeight,
-        readyState: v.readyState,
-        currentTime: v.currentTime,
-        paused: v.paused,
-        muted: v.muted,
-        hasSrcObject: !!v.srcObject,
-        trackCount: v.srcObject ? v.srcObject.getVideoTracks().length : 0,
-      });
-    }
-
-    async function logReceiverCodecs() {
-      if (!pc) return;
-      try {
-        var receivers = pc.getReceivers();
-        for (var i = 0; i < receivers.length; i++) {
-          var r = receivers[i];
-          if (r.track && r.track.kind === 'video') {
-            var params = r.getParameters ? r.getParameters() : null;
-            console.log('[webrtc][receiver]', {
-              trackId: r.track.id,
-              readyState: r.track.readyState,
-              muted: r.track.muted,
-              codecs: params && params.codecs ? params.codecs : '(n/a)',
-            });
-          }
-        }
-      } catch (e) {
-        console.warn('[webrtc] getReceivers failed', e);
-      }
-    }
-
-    function startStatsLoop() {
-      stopStatsLoop();
-      statsTimer = setInterval(async function() {
-        if (!pc) return;
-        var v = document.getElementById('video');
-        var lines = [];
-        lines.push('ICE: ' + pc.iceConnectionState + ' | conn: ' + pc.connectionState);
-        lines.push('video: ' + v.videoWidth + 'x' + v.videoHeight + ' readyState=' + v.readyState + ' t=' + v.currentTime.toFixed(2));
-
-        var timeDelta = v.currentTime - lastStats.currentTime;
-        var timeStuck = pc.iceConnectionState === 'connected' && timeDelta < 0.01;
-        if (timeStuck) lines.push('⚠ currentTime not advancing — decoder may be stuck');
-
-        try {
-          var report = await pc.getStats();
-          var codecsById = {};
-          report.forEach(function(stat) {
-            if (stat.type === 'codec') codecsById[stat.id] = stat;
-          });
-          report.forEach(function(stat) {
-            if (stat.type === 'inbound-rtp' && stat.kind === 'video') {
-              var bytesDelta = (stat.bytesReceived || 0) - lastStats.bytesReceived;
-              var framesDelta = (stat.framesDecoded || 0) - lastStats.framesDecoded;
-              var keyFrames = stat.keyFramesDecoded ?? 0;
-              var keyFramesDelta = keyFrames - (lastStats.keyFramesDecoded || 0);
-              var pli = stat.pliCount ?? 0;
-              var pliDelta = pli - (lastStats.pliCount || 0);
-              var nack = stat.nackCount ?? 0;
-              var nackDelta = nack - (lastStats.nackCount || 0);
-              var codecStat = stat.codecId ? codecsById[stat.codecId] : null;
-              var fmtp = codecStat ? (codecStat.sdpFmtpLine || codecStat.mimeType || '') : lastStats.codecFmtp;
-
-              lines.push('inbound-rtp: bytes=' + stat.bytesReceived + ' (+' + bytesDelta + '/2s)');
-              lines.push('  framesDecoded=' + (stat.framesDecoded ?? 'n/a') + ' (+' + framesDelta + '/2s) dropped=' + (stat.framesDropped ?? 'n/a'));
-              lines.push('  keyFrames=' + keyFrames + ' (+' + keyFramesDelta + '/2s) jitter=' + (stat.jitter ?? 'n/a'));
-              lines.push('  pli=' + pli + ' (+' + pliDelta + ') nack=' + nack + ' (+' + nackDelta + ') fir=' + (stat.firCount ?? 'n/a'));
-              if (fmtp) lines.push('  decoder codec: ' + fmtp);
-
-              if (keyFramesDelta > 0 && framesDelta === 0) {
-                lines.push('⚠ keyframes arrived but framesDecoded flat → bad H264 bitstream after IDR');
-              }
-              if (keyFramesDelta > 0 && timeDelta < 0.01) {
-                lines.push('⚠ keyframe received but currentTime stuck → decoder cannot recover');
-              }
-              if (fmtp && lastStats.codecFmtp && fmtp !== lastStats.codecFmtp) {
-                lines.push('⚠ profile-level-id / codec fmtp changed: ' + lastStats.codecFmtp + ' → ' + fmtp);
-              }
-              if (bytesDelta > 0 && framesDelta === 0) {
-                lines.push('⚠ bytes↑ framesDecoded flat → transcode/encode issue (try no #hardware, libx264)');
-              }
-              if (bytesDelta === 0 && pc.iceConnectionState === 'connected') {
-                lines.push('⚠ ICE connected but no RTP bytes — media path blocked');
-              }
-              if (framesDelta > 0 && (v.videoWidth === 0 || v.videoHeight === 0)) {
-                lines.push('⚠ frames decoded but video element has no dimensions');
-              }
-
-              lastStats.bytesReceived = stat.bytesReceived || 0;
-              lastStats.framesDecoded = stat.framesDecoded || 0;
-              lastStats.keyFramesDecoded = keyFrames;
-              lastStats.pliCount = pli;
-              lastStats.nackCount = nack;
-              if (fmtp) lastStats.codecFmtp = fmtp;
-            }
-          });
-        } catch (e) {
-          lines.push('getStats error: ' + e.message);
-        }
-
-        lastStats.currentTime = v.currentTime;
-        setStats(lines.join('\\n'));
-        console.log('[webrtc][stats]', lines.join(' | '));
-      }, 2000);
-    }
-
-    function stopStatsLoop() {
-      if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
-      lastStats = {
-        bytesReceived: 0, framesDecoded: 0, keyFramesDecoded: 0,
-        currentTime: 0, pliCount: 0, nackCount: 0, codecFmtp: '',
-      };
-    }
-
-    async function connect() {
-      disconnect();
-      var camera = document.getElementById('camera').value;
-      setStatus('Fetching ICE config...', '#ffd700');
-
-      var iceRes = await fetch('/api/monitoring/ice-config');
-      var iceData = await iceRes.json();
-      var iceServers = iceData.data.ice_servers;
-      setStatus('Creating peer connection...', '#ffd700');
-
-      pc = new RTCPeerConnection({ iceServers: iceServers, sdpSemantics: 'unified-plan' });
-      var videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
-      preferH264Only(videoTransceiver);
-
-      pc.oniceconnectionstatechange = function() {
-        setStatus('ICE: ' + pc.iceConnectionState, pc.iceConnectionState === 'connected' ? '#00ff00' : '#ffd700');
-        if (pc.iceConnectionState === 'connected') {
-          logVideoElementState('ice-connected');
-          logReceiverCodecs();
-        }
-      };
-
-      pc.onconnectionstatechange = function() {
-        console.log('[webrtc] connectionState:', pc.connectionState);
-      };
-
-      pc.ontrack = function(e) {
-        console.log('[webrtc][ontrack]', {
-          kind: e.track.kind,
-          id: e.track.id,
-          readyState: e.track.readyState,
-          muted: e.track.muted,
-          streamIds: e.streams.map(function(s) { return s.id; }),
-        });
-        e.track.onmute = function() { console.warn('[webrtc] track muted', e.track.id); };
-        e.track.onunmute = function() { console.log('[webrtc] track unmuted', e.track.id); logVideoElementState('track-unmuted'); };
-        var stream = e.streams[0] || new MediaStream([e.track]);
-        document.getElementById('video').srcObject = stream;
-        var v = document.getElementById('video');
-        v.play().catch(function(err) { console.warn('[webrtc] video.play()', err); });
-        setStatus('Track received (' + e.track.kind + '), waiting for decode...', '#ffd700');
-        startStatsLoop();
-      };
-
-      setStatus('Creating offer...', '#ffd700');
-      var offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      console.log('[webrtc] local offer codecs:', sdpCodecSummary(pc.localDescription.sdp));
-
-      await new Promise(function(resolve) {
-        if (pc.iceGatheringState === 'complete') return resolve();
-        pc.onicegatheringstatechange = function() {
-          if (pc.iceGatheringState === 'complete') resolve();
-        };
-        setTimeout(resolve, 5000);
-      });
-
-      setStatus('Sending offer to Pi via Railway (may take ~20s on cold start)...', '#ffd700');
-      var offerRes = await fetch(
-        '/api/monitoring/devices/' + DEVICE_ID + '/streams/' + camera + '/webrtc/offer',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + TEST_TOKEN
-          },
-          body: JSON.stringify({
-            type: pc.localDescription.type,
-            sdp: pc.localDescription.sdp
-          })
-        }
-      );
-
-      if (!offerRes.ok) {
-        var errText = await offerRes.text();
-        setStatus('❌ Offer failed: ' + offerRes.status + ' ' + errText.slice(0, 120), '#ff4444');
-        return;
-      }
-
-      var answer = await offerRes.json();
-      if (!answer.success || answer.data?.error) {
-        setStatus('❌ Pi/go2rtc error: ' + (answer.data?.error || answer.message || 'unknown'), '#ff4444');
-        return;
-      }
-      if (!answer.data?.sdp) {
-        setStatus('❌ Empty SDP answer from Pi/go2rtc', '#ff4444');
-        return;
-      }
-
-      console.log('[webrtc] remote answer type:', answer.data.type);
-      console.log('[webrtc] remote answer preview:', answer.data.sdp.slice(0, 200));
-      console.log('[webrtc] remote answer codecs:', sdpCodecSummary(answer.data.sdp));
-
-      setStatus('Got answer, setRemoteDescription...', '#ffd700');
-      await pc.setRemoteDescription({
-        type: answer.data.type || 'answer',
-        sdp: answer.data.sdp
-      });
-      lastStats.codecFmtp = (function(sdp) {
-        var m = sdp && sdp.match(/a=fmtp:\\d+ .*profile-level-id=([0-9a-fA-F]+)/i);
-        return m ? 'profile-level-id=' + m[1] : '';
-      })(answer.data.sdp);
-      console.log('[webrtc] negotiated answer H264:', lastStats.codecFmtp || sdpCodecSummary(answer.data.sdp));
-      logReceiverCodecs();
-      setStatus('Waiting for video (check stats panel)...', '#ffd700');
-    }
-
-    function disconnect() {
-      stopStatsLoop();
-      if (pc) { pc.close(); pc = null; }
-      document.getElementById('video').srcObject = null;
-      setStats('Stats: (disconnected)');
-      setStatus('Disconnected', '#888');
+    function loadStream() {
+      var piIp = document.getElementById('piIp').value.trim();
+      var port = document.getElementById('port').value.trim();
+      var path = document.getElementById('path').value.trim();
+      var scheme = ${JSON.stringify(defaultScheme)};
+      var url = scheme + '://' + piIp + ':' + port + '/' + encodeURIComponent(path) + '/';
+      document.getElementById('player').src = url;
+      document.getElementById('status').textContent = 'Loaded: ' + url;
     }
   </script>
 </body>
@@ -443,7 +153,7 @@ app.use('/api/lobbies', lobbyRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/agents', agentRoutes);
 app.use('/api/monitoring', monitoringRoutes);
-app.use('/api/streams', streamRoutes);
+app.use('/api/cameras', cameraRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/analytics', analyticsRoutes);
 logInfo('Server', 'Auth and user routes registered', {
@@ -533,7 +243,6 @@ logInfo('Server', 'Authentication middleware applied to Socket.IO');
 app.set('io', io);
 initializeSocket(io);
 startDeviceHealthScheduler(io);
-startStreamIdleCleanup(io);
 logInfo('Server', 'Socket event handlers initialized');
 
 const PORT = process.env.PORT || 3000;

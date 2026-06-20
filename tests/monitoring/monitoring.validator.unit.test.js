@@ -23,7 +23,7 @@ describe('Monitoring validator unit tests', () => {
     assert.strictEqual(good.isValid, true);
   });
 
-  test('validateStreamStatusPayload requires streams or go2rtc', () => {
+  test('validateStreamStatusPayload requires streams or mediamtx', () => {
     const bad = validateStreamStatusPayload({ deviceId: uuid });
     assert.strictEqual(bad.isValid, false);
     const good = validateStreamStatusPayload({

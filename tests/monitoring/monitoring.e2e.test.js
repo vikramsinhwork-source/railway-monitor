@@ -103,7 +103,7 @@ describe('E2E — Monitoring module', { skip: process.env.SKIP_SOCKET_E2E === '1
       body: JSON.stringify({
         deviceId: device.id,
         streams: [{ name: 'kiosk1', online: true, producers: 1, consumers: 0 }],
-        go2rtc: { summary: { online: 1, offline: 0, total: 1 } },
+        mediamtx: { summary: { online: 1, offline: 0, total: 1 } },
       }),
     });
     assert.strictEqual(res.status, 200, JSON.stringify(res.data));

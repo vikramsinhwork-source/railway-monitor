@@ -13,6 +13,7 @@ import DeviceCommand from '../modules/realtime/deviceCommand.model.js';
 import DeviceLog from '../modules/health/deviceLog.model.js';
 import DeviceHealthSnapshot from '../modules/health/deviceHealthSnapshot.model.js';
 import StreamSession from '../modules/streams/streamSession.model.js';
+import StreamCamera from '../modules/cameras/streamCamera.model.js';
 import DeviceHeartbeat from '../modules/monitoring/deviceHeartbeat.model.js';
 import DeviceScreenshot from '../modules/monitoring/deviceScreenshot.model.js';
 import { initFormModels } from '../modules/forms/index.js';
@@ -415,6 +416,31 @@ export function initModels() {
     onUpdate: 'CASCADE',
   });
 
+  Device.hasMany(StreamCamera, {
+    foreignKey: 'pi_device_id',
+    as: 'streamCameras',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  StreamCamera.belongsTo(Device, {
+    foreignKey: 'pi_device_id',
+    as: 'piDevice',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  StreamCamera.belongsTo(Lobby, {
+    foreignKey: 'lobby_id',
+    as: 'lobby',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+  StreamCamera.belongsTo(Division, {
+    foreignKey: 'division_id',
+    as: 'division',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE',
+  });
+
   initialized = true;
 }
 
@@ -434,6 +460,7 @@ export {
   DeviceLog,
   DeviceHealthSnapshot,
   StreamSession,
+  StreamCamera,
   DeviceHeartbeat,
   DeviceScreenshot,
 };

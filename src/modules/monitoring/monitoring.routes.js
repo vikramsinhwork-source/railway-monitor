@@ -3,10 +3,9 @@ import { requireAuth } from '../../middleware/auth.middleware.js';
 import { requireMonitor } from '../../middleware/rbac.middleware.js';
 import { requireDeviceAuth, requireOwnDevice } from './monitoring.middleware.js';
 import * as monitoringController from './monitoring.controller.js';
-import { proxyWebrtcOffer, getWebrtcConfig, getIceConfig } from './monitoring.webrtc.controller.js';
+import { getIceConfig } from './monitoring.ice.controller.js';
 
 const router = express.Router();
-const WEBRTC_OFFER_PATH = '/devices/:id/streams/:streamName/webrtc/offer';
 
 function requireAuthHeaderOrQuery(req, res, next) {
   const token = req.query.token || req.query.access_token;
@@ -14,17 +13,6 @@ function requireAuthHeaderOrQuery(req, res, next) {
     req.headers.authorization = `Bearer ${token}`;
   }
   return requireAuth(req, res, next);
-}
-
-function setWebrtcOfferCorsHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-}
-
-function webrtcOfferCorsGuard(req, res, next) {
-  setWebrtcOfferCorsHeaders(res);
-  return next();
 }
 
 // Device agent endpoints (JWT device token)
@@ -41,14 +29,6 @@ router.post(
 
 router.get('/ice-config', getIceConfig);
 
-// WebRTC signaling — Flutter sends offer, Railway proxies to Pi, video goes direct
-router.get('/devices/:id/webrtc/config', requireAuth, requireMonitor, getWebrtcConfig);
-router.use(WEBRTC_OFFER_PATH, webrtcOfferCorsGuard);
-router.options(WEBRTC_OFFER_PATH, (req, res) => {
-  res.sendStatus(200);
-});
-router.post(WEBRTC_OFFER_PATH, proxyWebrtcOffer);
-
 // Admin / monitor endpoints
 router.get('/lobby-streams', requireAuth, requireMonitor, monitoringController.divisionLobbyStreams);
 router.get('/lobbies/:lobbyId/streams', requireAuth, requireMonitor, monitoringController.lobbyStreams);
@@ -62,7 +42,8 @@ router.get('/devices/:id/screenshots', requireAuth, requireMonitor, monitoringCo
 router.get('/devices/:id/status', requireAuth, requireMonitor, monitoringController.getStatus);
 router.get('/devices/:id', requireAuth, requireMonitor, monitoringController.getDevice);
 router.post('/devices/:id/reboot', requireAuth, requireMonitor, monitoringController.reboot);
-router.post('/devices/:id/restart-go2rtc', requireAuth, requireMonitor, monitoringController.restartGo2rtc);
+router.post('/devices/:id/restart-mediamtx', requireAuth, requireMonitor, monitoringController.restartMediamtx);
+router.post('/devices/:id/restart-go2rtc', requireAuth, requireMonitor, monitoringController.restartMediamtx);
 router.post('/devices/:id/restart-agent', requireAuth, requireMonitor, monitoringController.restartAgent);
 router.post('/devices/:id/update', requireAuth, requireMonitor, monitoringController.update);
 router.post('/devices/:id/capture-screenshot', requireAuth, requireMonitor, monitoringController.captureScreenshot);

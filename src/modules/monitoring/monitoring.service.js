@@ -2,7 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { createReadStream } from 'fs';
 import { Op } from 'sequelize';
-import { parseGo2rtcStreamsPayload } from './go2rtc.parser.js';
+import { parseMediaMtxPathsPayload } from './mediamtx.parser.js';
+import { syncCamerasForPiDevice } from '../cameras/camera.service.js';
 import Device from '../divisions/device.model.js';
 import DeviceLog from '../health/deviceLog.model.js';
 import DeviceHeartbeat from './deviceHeartbeat.model.js';
@@ -26,6 +27,7 @@ const SCREENSHOT_TTL_HOURS = Number(process.env.MONITORING_SCREENSHOT_TTL_HOURS 
 
 const DEVICE_COMMAND_MAP = {
   reboot: 'REBOOT_PI',
+  'restart-mediamtx': 'RESTART_GO2RTC',
   'restart-go2rtc': 'RESTART_GO2RTC',
   'restart-agent': 'RESTART_AGENT',
   update: 'UPDATE_AGENT',
@@ -34,7 +36,8 @@ const DEVICE_COMMAND_MAP = {
 
 const SOCKET_EVENT_MAP = {
   reboot: 'device:reboot',
-  'restart-go2rtc': 'device:restart-go2rtc',
+  'restart-mediamtx': 'device:restart-mediamtx',
+  'restart-go2rtc': 'device:restart-mediamtx',
   'restart-agent': 'device:restart-agent',
   update: 'device:update',
   'capture-screenshot': 'device:capture-screenshot',
@@ -125,6 +128,7 @@ export async function registerMonitoringDevice(payload) {
     ipAddress,
     agentVersion,
     deviceType = 'RASPBERRY',
+    mediamtxPaths,
   } = payload;
 
   let device = await findDeviceByIdentifier({ deviceId, serialNumber, deviceName: deviceName || deviceId });
@@ -150,30 +154,34 @@ export async function registerMonitoringDevice(payload) {
       health_status: 'ONLINE',
       meta: {
         agent: { hostname, registeredAt: new Date().toISOString() },
+        mediamtxPaths: mediamtxPaths || [],
       },
     });
     await logMonitoringEvent(device, 'MONITORING_REGISTERED', `Device created: ${deviceName}`, payload);
+    await syncCamerasForPiDevice(device, mediamtxPaths || []);
     return { ok: true, created: true, device: toMonitoringDeviceResponse(device) };
-  } else {
-    const meta = {
-      ...(device.meta || {}),
-      agent: {
-        ...(device.meta?.agent || {}),
-        hostname: hostname || device.meta?.agent?.hostname,
-        registeredAt: new Date().toISOString(),
-      },
-    };
-    await device.update({
-      status: 'ONLINE',
-      last_seen_at: new Date(),
-      health_status: 'ONLINE',
-      ip_address: ipAddress || device.ip_address,
-      agent_version: agentVersion || device.agent_version,
-      serial_number: serialNumber || device.serial_number,
-      meta,
-    });
-    await logMonitoringEvent(device, 'MONITORING_REGISTERED', `Device registered: ${device.device_name}`, payload);
   }
+
+  const meta = {
+    ...(device.meta || {}),
+    agent: {
+      ...(device.meta?.agent || {}),
+      hostname: hostname || device.meta?.agent?.hostname,
+      registeredAt: new Date().toISOString(),
+    },
+    mediamtxPaths: mediamtxPaths || device.meta?.mediamtxPaths || [],
+  };
+  await device.update({
+    status: 'ONLINE',
+    last_seen_at: new Date(),
+    health_status: 'ONLINE',
+    ip_address: ipAddress || device.ip_address,
+    agent_version: agentVersion || device.agent_version,
+    serial_number: serialNumber || device.serial_number,
+    meta,
+  });
+  await logMonitoringEvent(device, 'MONITORING_REGISTERED', `Device registered: ${device.device_name}`, payload);
+  await syncCamerasForPiDevice(device, mediamtxPaths || device.meta?.mediamtxPaths || []);
 
   return { ok: true, created: false, device: toMonitoringDeviceResponse(device) };
 }
@@ -214,16 +222,16 @@ function enrichStreamPayload(streamPayload) {
     return streamPayload;
   }
 
-  const rawGo2rtc = streamPayload.go2rtc?.raw || streamPayload.raw;
-  if (rawGo2rtc && typeof rawGo2rtc === 'object' && !Array.isArray(rawGo2rtc)) {
-    const parsed = parseGo2rtcStreamsPayload(rawGo2rtc);
+  const rawMediaMtx = streamPayload.mediamtx?.raw || streamPayload.raw;
+  if (rawMediaMtx && typeof rawMediaMtx === 'object' && !Array.isArray(rawMediaMtx)) {
+    const parsed = parseMediaMtxPathsPayload(rawMediaMtx);
     return {
       ...streamPayload,
       streams: parsed.streams,
-      go2rtc: {
-        ...(streamPayload.go2rtc || {}),
+      mediamtx: {
+        ...(streamPayload.mediamtx || {}),
         ...parsed,
-        fetchedAt: streamPayload.go2rtc?.fetchedAt || new Date().toISOString(),
+        fetchedAt: streamPayload.mediamtx?.fetchedAt || new Date().toISOString(),
       },
     };
   }
@@ -468,7 +476,15 @@ export async function handleDeviceOnline({ deviceId, payload, socketId }) {
     health_status: 'ONLINE',
     ip_address: payload?.ipAddress || device.ip_address,
     agent_version: payload?.agentVersion || device.agent_version,
+    meta: {
+      ...(device.meta || {}),
+      mediamtxPaths: payload?.mediamtxPaths || device.meta?.mediamtxPaths || [],
+    },
   });
+
+  if (payload?.mediamtxPaths?.length) {
+    await syncCamerasForPiDevice(device, payload.mediamtxPaths);
+  }
 
   await logMonitoringEvent(device, 'DEVICE_ONLINE', 'Device came online via socket', payload);
   return { ok: true, device: toMonitoringDeviceResponse(device) };
@@ -477,7 +493,7 @@ export async function handleDeviceOnline({ deviceId, payload, socketId }) {
 export async function handleDeviceStreamStatus(deviceId, streamPayload) {
   const enriched = enrichStreamPayload(streamPayload);
   const streamStatus = enriched?.streams ? enriched : { streams: enriched };
-  const go2rtcStatus = enriched?.go2rtc || enriched;
+  const mediamtxStatus = enriched?.mediamtx || enriched;
 
   const device = await Device.findByPk(deviceId);
   if (!device) {
@@ -486,10 +502,16 @@ export async function handleDeviceStreamStatus(deviceId, streamPayload) {
 
   await device.update({
     stream_status: streamStatus,
-    go2rtc_status: go2rtcStatus,
+    go2rtc_status: mediamtxStatus,
     last_seen_at: new Date(),
     status: 'ONLINE',
   });
+
+  await syncCamerasForPiDevice(
+    device,
+    device.meta?.mediamtxPaths || mediamtxStatus?.paths || [],
+    enriched?.streams || streamStatus?.streams || []
+  );
 
   await logMonitoringEvent(device, 'STREAM_STATUS_UPDATE', 'Stream status updated', enriched);
   return { ok: true, device: toMonitoringDeviceResponse(device) };
@@ -587,10 +609,10 @@ function inferStreamMeta(streamName, lobbyDevices = []) {
   return { label: streamName, stream_type: 'stream', linked_device_id: null, linked_device_name: null };
 }
 
-function extractGo2rtcStreams(device) {
-  const streams = device?.go2rtc_status?.streams
-    || device?.stream_status?.streams
-    || device?.stream_status?.go2rtc?.streams
+function extractMediaMtxStreams(device) {
+  const streams = device?.stream_status?.streams
+    || device?.stream_status?.mediamtx?.streams
+    || device?.go2rtc_status?.streams
     || [];
   return Array.isArray(streams) ? streams : [];
 }
@@ -634,8 +656,8 @@ async function buildLobbyStreamsPayload(lobby, user, baseUrl) {
     };
   }
 
-  const go2rtcStreams = extractGo2rtcStreams(piAgent);
-  const streams = go2rtcStreams.map((stream) => {
+  const mediamtxStreams = extractMediaMtxStreams(piAgent);
+  const streams = mediamtxStreams.map((stream) => {
     const meta = inferStreamMeta(stream.name, lobbyDevices);
     const frameMeta = piAgent.meta?.stream_frames?.[stream.name];
     const freshness = deriveFrameFreshness(frameMeta?.updated_at || null);

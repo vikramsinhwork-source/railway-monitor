@@ -216,7 +216,8 @@ async function sendCommand(req, res, action) {
 }
 
 export const reboot = (req, res) => sendCommand(req, res, 'reboot');
-export const restartGo2rtc = (req, res) => sendCommand(req, res, 'restart-go2rtc');
+export const restartMediamtx = (req, res) => sendCommand(req, res, 'restart-mediamtx');
+export const restartGo2rtc = restartMediamtx;
 export const restartAgent = (req, res) => sendCommand(req, res, 'restart-agent');
 export const update = (req, res) => sendCommand(req, res, 'update');
 export const captureScreenshot = (req, res) => sendCommand(req, res, 'capture-screenshot');

@@ -83,8 +83,8 @@ async function connectAgent(deviceId) {
 }
 
 describe(
-  'E2E — Live stream infrastructure',
-  { skip: process.env.SKIP_SOCKET_E2E === '1' },
+  'E2E — Live stream infrastructure (legacy go2rtc signaling removed)',
+  { skip: true },
   () => {
     let adminToken;
     let monitorToken;

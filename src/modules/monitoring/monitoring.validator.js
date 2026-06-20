@@ -33,6 +33,7 @@ export function validateRegisterPayload(payload) {
       hostname,
       ipAddress,
       agentVersion,
+      mediamtxPaths: Array.isArray(payload?.mediamtxPaths) ? payload.mediamtxPaths : [],
       stationCode: normalizeString(payload?.stationCode),
     },
   };
@@ -66,8 +67,8 @@ export function validateStreamStatusPayload(payload) {
   const errors = [];
   const deviceId = normalizeString(payload?.deviceId);
   if (!deviceId || !isValidUuid(deviceId)) errors.push('deviceId must be a valid UUID');
-  if (!payload?.streams && !payload?.go2rtc) {
-    errors.push('streams or go2rtc status is required');
+  if (!payload?.streams && !payload?.mediamtx && !payload?.go2rtc) {
+    errors.push('streams or mediamtx status is required');
   }
 
   return {
@@ -110,6 +111,8 @@ export function validateDeviceOnlinePayload(payload) {
       ipAddress: normalizeString(payload?.ipAddress || payload?.ip_address),
       agentVersion: normalizeString(payload?.agentVersion || payload?.agent_version),
       hostname: normalizeString(payload?.hostname),
+      mediamtxPaths: Array.isArray(payload?.mediamtxPaths) ? payload.mediamtxPaths : [],
+      capabilities: payload?.capabilities || null,
       serialNumber: normalizeString(payload?.serialNumber || payload?.serial_number),
     },
   };

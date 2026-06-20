@@ -15,7 +15,6 @@ import {
   validateCommandResultPayload,
 } from '../modules/monitoring/monitoring.validator.js';
 import { processAgentCommandResult, handleAgentOffline } from '../modules/agents/agent.service.js';
-import { handleWebrtcAnswer } from '../modules/monitoring/monitoring.webrtc.controller.js';
 
 const RECONNECT_WINDOW_MS = 5000;
 const reconnectGuard = new Map();
@@ -151,9 +150,6 @@ export function registerMonitoringHandlers(io, socket) {
     }
   });
 
-  socket.on('webrtc:answer', (payload) => {
-    handleWebrtcAnswer(payload);
-  });
 
   socket.on('device:heartbeat', async (payload = {}) => {
     if (!validateOrError(socket, role === ROLES.KIOSK, ERROR_CODES.AUTH_INVALID_ROLE,
