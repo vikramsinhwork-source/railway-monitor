@@ -106,7 +106,7 @@ app.get('/webrtc-test', (req, res) => {
 </head>
 <body>
   <h2>🎥 RailWatch WebRTC Test</h2>
-  <p style="color:#888;font-size:14px">Open DevTools console for full media diagnostics.</p>
+  <p style="color:#888;font-size:14px">Open DevTools console for diagnostics. Also compare with go2rtc UI: <code>http://PI_IP:1984</code> → Streams → WebRTC preview.</p>
 
   <div>
     <select id="camera">
@@ -132,7 +132,15 @@ app.get('/webrtc-test', (req, res) => {
     const TEST_TOKEN = 'webrtc-test-token';
     let pc = null;
     let statsTimer = null;
-    let lastStats = { bytesReceived: 0, framesDecoded: 0, currentTime: 0 };
+    let lastStats = {
+      bytesReceived: 0,
+      framesDecoded: 0,
+      keyFramesDecoded: 0,
+      currentTime: 0,
+      pliCount: 0,
+      nackCount: 0,
+      codecFmtp: '',
+    };
 
     function setStatus(msg, color='#fff') {
       const el = document.getElementById('status');
@@ -224,16 +232,40 @@ app.get('/webrtc-test', (req, res) => {
 
         try {
           var report = await pc.getStats();
+          var codecsById = {};
+          report.forEach(function(stat) {
+            if (stat.type === 'codec') codecsById[stat.id] = stat;
+          });
           report.forEach(function(stat) {
             if (stat.type === 'inbound-rtp' && stat.kind === 'video') {
               var bytesDelta = (stat.bytesReceived || 0) - lastStats.bytesReceived;
               var framesDelta = (stat.framesDecoded || 0) - lastStats.framesDecoded;
+              var keyFrames = stat.keyFramesDecoded ?? 0;
+              var keyFramesDelta = keyFrames - (lastStats.keyFramesDecoded || 0);
+              var pli = stat.pliCount ?? 0;
+              var pliDelta = pli - (lastStats.pliCount || 0);
+              var nack = stat.nackCount ?? 0;
+              var nackDelta = nack - (lastStats.nackCount || 0);
+              var codecStat = stat.codecId ? codecsById[stat.codecId] : null;
+              var fmtp = codecStat ? (codecStat.sdpFmtpLine || codecStat.mimeType || '') : lastStats.codecFmtp;
+
               lines.push('inbound-rtp: bytes=' + stat.bytesReceived + ' (+' + bytesDelta + '/2s)');
               lines.push('  framesDecoded=' + (stat.framesDecoded ?? 'n/a') + ' (+' + framesDelta + '/2s) dropped=' + (stat.framesDropped ?? 'n/a'));
-              lines.push('  keyFrames=' + (stat.keyFramesDecoded ?? 'n/a') + ' jitter=' + (stat.jitter ?? 'n/a'));
-              lines.push('  pli=' + (stat.pliCount ?? 'n/a') + ' fir=' + (stat.firCount ?? 'n/a') + ' nack=' + (stat.nackCount ?? 'n/a'));
+              lines.push('  keyFrames=' + keyFrames + ' (+' + keyFramesDelta + '/2s) jitter=' + (stat.jitter ?? 'n/a'));
+              lines.push('  pli=' + pli + ' (+' + pliDelta + ') nack=' + nack + ' (+' + nackDelta + ') fir=' + (stat.firCount ?? 'n/a'));
+              if (fmtp) lines.push('  decoder codec: ' + fmtp);
+
+              if (keyFramesDelta > 0 && framesDelta === 0) {
+                lines.push('⚠ keyframes arrived but framesDecoded flat → bad H264 bitstream after IDR');
+              }
+              if (keyFramesDelta > 0 && timeDelta < 0.01) {
+                lines.push('⚠ keyframe received but currentTime stuck → decoder cannot recover');
+              }
+              if (fmtp && lastStats.codecFmtp && fmtp !== lastStats.codecFmtp) {
+                lines.push('⚠ profile-level-id / codec fmtp changed: ' + lastStats.codecFmtp + ' → ' + fmtp);
+              }
               if (bytesDelta > 0 && framesDelta === 0) {
-                lines.push('⚠ bytes increasing but framesDecoded flat → likely codec/bitstream issue');
+                lines.push('⚠ bytes↑ framesDecoded flat → transcode/encode issue (try no #hardware, libx264)');
               }
               if (bytesDelta === 0 && pc.iceConnectionState === 'connected') {
                 lines.push('⚠ ICE connected but no RTP bytes — media path blocked');
@@ -241,8 +273,13 @@ app.get('/webrtc-test', (req, res) => {
               if (framesDelta > 0 && (v.videoWidth === 0 || v.videoHeight === 0)) {
                 lines.push('⚠ frames decoded but video element has no dimensions');
               }
+
               lastStats.bytesReceived = stat.bytesReceived || 0;
               lastStats.framesDecoded = stat.framesDecoded || 0;
+              lastStats.keyFramesDecoded = keyFrames;
+              lastStats.pliCount = pli;
+              lastStats.nackCount = nack;
+              if (fmtp) lastStats.codecFmtp = fmtp;
             }
           });
         } catch (e) {
@@ -257,7 +294,10 @@ app.get('/webrtc-test', (req, res) => {
 
     function stopStatsLoop() {
       if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
-      lastStats = { bytesReceived: 0, framesDecoded: 0, currentTime: 0 };
+      lastStats = {
+        bytesReceived: 0, framesDecoded: 0, keyFramesDecoded: 0,
+        currentTime: 0, pliCount: 0, nackCount: 0, codecFmtp: '',
+      };
     }
 
     async function connect() {
@@ -358,6 +398,11 @@ app.get('/webrtc-test', (req, res) => {
         type: answer.data.type || 'answer',
         sdp: answer.data.sdp
       });
+      lastStats.codecFmtp = (function(sdp) {
+        var m = sdp && sdp.match(/a=fmtp:\\d+ .*profile-level-id=([0-9a-fA-F]+)/i);
+        return m ? 'profile-level-id=' + m[1] : '';
+      })(answer.data.sdp);
+      console.log('[webrtc] negotiated answer H264:', lastStats.codecFmtp || sdpCodecSummary(answer.data.sdp));
       logReceiverCodecs();
       setStatus('Waiting for video (check stats panel)...', '#ffd700');
     }
