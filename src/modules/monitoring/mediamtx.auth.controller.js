@@ -34,7 +34,8 @@ function isReadAction(action) {
   return action === 'read' || action === 'playback';
 }
 
-const LOCALHOST_ALLOWED_ACTIONS = new Set(['read', 'playback', 'api']);
+// publish: runOnDemand ffmpeg publishes transcoded RTSP to 127.0.0.1:$RTSP_PORT
+const LOCALHOST_ALLOWED_ACTIONS = new Set(['read', 'playback', 'api', 'publish']);
 
 export async function mediamtxAuth(req, res) {
   const body = req.body || {};

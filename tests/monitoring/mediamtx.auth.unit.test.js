@@ -61,6 +61,39 @@ describe('mediamtx.auth.controller', () => {
     assert.strictEqual(res.statusCode, 200);
   });
 
+  test('allows localhost runOnDemand ffmpeg RTSP publish without token', async () => {
+    const res = mockRes();
+    await mediamtxAuth(
+      {
+        body: {
+          ip: '127.0.0.1',
+          action: 'publish',
+          protocol: 'rtsp',
+          path: 'camera1',
+        },
+      },
+      res
+    );
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(res.body, 'OK');
+  });
+
+  test('rejects LAN RTSP publish without token', async () => {
+    const res = mockRes();
+    await mediamtxAuth(
+      {
+        body: {
+          ip: '192.168.1.50',
+          action: 'publish',
+          protocol: 'rtsp',
+          path: 'camera1',
+        },
+      },
+      res
+    );
+    assert.strictEqual(res.statusCode, 403);
+  });
+
   test('rejects LAN webrtc read without token', async () => {
     const res = mockRes();
     await mediamtxAuth(
