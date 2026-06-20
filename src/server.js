@@ -198,6 +198,7 @@ app.get('/webrtc-test', (req, res) => {
       return filtered;
     }
 
+    function sdpCodecSummary(sdp) {
       if (!sdp) return '(no sdp)';
       const codecs = [];
       sdp.split(/\\r\\n|\\n/).forEach(function(line) {
