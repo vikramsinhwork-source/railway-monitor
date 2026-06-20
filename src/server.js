@@ -162,42 +162,6 @@ app.get('/webrtc-test', (req, res) => {
       }
     }
 
-    function filterOfferToH264(sdp) {
-      if (!document.getElementById('h264Only').checked || !sdp) return sdp;
-      var eol = sdp.indexOf('\\r\\n') >= 0 ? '\\r\\n' : '\\n';
-      var lines = sdp.split(/\\r\\n|\\n/);
-      var h264Pts = {};
-      lines.forEach(function(line) {
-        var m = line.match(/^a=rtpmap:(\\d+) H264\\//i);
-        if (m) h264Pts[m[1]] = true;
-      });
-      lines.forEach(function(line) {
-        var apt = line.match(/^a=fmtp:(\\d+) apt=(\\d+)/);
-        if (apt && h264Pts[apt[2]]) h264Pts[apt[1]] = true;
-      });
-      var out = [];
-      var inVideo = false;
-      for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        if (line.indexOf('m=video') === 0) {
-          inVideo = true;
-          var parts = line.split(' ');
-          var kept = parts.slice(3).filter(function(pt) { return h264Pts[pt]; });
-          out.push(parts.slice(0, 3).concat(kept).join(' '));
-          continue;
-        }
-        if (line.indexOf('m=') === 0) inVideo = false;
-        if (inVideo) {
-          var pm = line.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\\d+)/);
-          if (pm && !h264Pts[pm[1]]) continue;
-        }
-        out.push(line);
-      }
-      var filtered = out.join(eol) + eol;
-      console.log('[webrtc] offer SDP stripped to H264 payload types:', Object.keys(h264Pts).join(','));
-      return filtered;
-    }
-
     function sdpCodecSummary(sdp) {
       if (!sdp) return '(no sdp)';
       const codecs = [];
@@ -342,9 +306,6 @@ app.get('/webrtc-test', (req, res) => {
 
       setStatus('Creating offer...', '#ffd700');
       var offer = await pc.createOffer();
-      if (document.getElementById('h264Only').checked) {
-        offer.sdp = filterOfferToH264(offer.sdp);
-      }
       await pc.setLocalDescription(offer);
       console.log('[webrtc] local offer codecs:', sdpCodecSummary(pc.localDescription.sdp));
 
