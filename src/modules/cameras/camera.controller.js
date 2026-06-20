@@ -4,6 +4,9 @@ import { buildWebrtcPlayUrl, listCamerasForUser } from './camera.service.js';
 export async function getWebrtcUrl(req, res) {
   const result = await buildWebrtcPlayUrl(req.params.id, req.user);
   if (result.forbidden) return sendError(res, 'Forbidden', 403);
+  if (result.deprecated) {
+    return sendError(res, result.message, 410);
+  }
   if (result.notFound) {
     return sendError(res, result.message || 'Camera not found', 404);
   }

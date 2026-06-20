@@ -9,9 +9,14 @@ import {
 } from '../../src/modules/cameras/camera.service.js';
 
 describe('camera.service — WebRTC play URL', () => {
-  test('getWebrtcPlaybackMode defaults to direct', () => {
+  test('getWebrtcPlaybackMode defaults to direct in non-production', () => {
     assert.strictEqual(getWebrtcPlaybackMode({}), 'direct');
     assert.strictEqual(getWebrtcPlaybackMode({ PI_WEBRTC_PLAYBACK_MODE: 'direct' }), 'direct');
+  });
+
+  test('getWebrtcPlaybackMode socket in production or when set', () => {
+    assert.strictEqual(getWebrtcPlaybackMode({ NODE_ENV: 'production' }), 'socket');
+    assert.strictEqual(getWebrtcPlaybackMode({ PI_WEBRTC_PLAYBACK_MODE: 'socket' }), 'socket');
   });
 
   test('getWebrtcPlaybackMode edge when set', () => {

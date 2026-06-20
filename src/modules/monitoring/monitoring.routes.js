@@ -4,6 +4,7 @@ import { requireMonitor } from '../../middleware/rbac.middleware.js';
 import { requireDeviceAuth, requireOwnDevice } from './monitoring.middleware.js';
 import * as monitoringController from './monitoring.controller.js';
 import { getIceConfig } from './monitoring.ice.controller.js';
+import { proxyWebrtcOffer } from './monitoring.webrtc.controller.js';
 
 const router = express.Router();
 
@@ -28,6 +29,13 @@ router.post(
 );
 
 router.get('/ice-config', getIceConfig);
+
+router.post(
+  '/devices/:id/streams/:streamName/webrtc/offer',
+  requireAuth,
+  requireMonitor,
+  proxyWebrtcOffer
+);
 
 // Admin / monitor endpoints
 router.get('/lobby-streams', requireAuth, requireMonitor, monitoringController.divisionLobbyStreams);

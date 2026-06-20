@@ -20,6 +20,7 @@ import deviceRoutes from './modules/devices/device.route.js';
 import agentRoutes from './modules/agents/agent.route.js';
 import monitoringRoutes from './modules/monitoring/monitoring.routes.js';
 import cameraRoutes from './modules/cameras/camera.routes.js';
+import { mediamtxAuth } from './modules/monitoring/mediamtx.auth.controller.js';
 import healthRoutes from './modules/health/health.routes.js';
 import analyticsRoutes from './modules/analytics/analytics.routes.js';
 import { startDeviceHealthScheduler } from './services/deviceHealth.scheduler.js';
@@ -106,8 +107,9 @@ app.get('/mediamtx-test', (req, res) => {
 </head>
 <body>
   <h1>MediaMTX browser test (direct Pi)</h1>
-  <p class="hint">Production playback uses each Pi LAN IP from <code>GET /api/cameras/:id/webrtc-url</code>.
-  Test locally by opening <code>http://&lt;pi-ip&gt;:8889/camera1/</code> or use the form below.</p>
+  <p class="hint">Production playback uses authenticated
+  <code>POST /api/monitoring/devices/:id/streams/:streamName/webrtc/offer</code>
+  (socket relay → Pi agent → localhost WHEP). This page is for direct Pi LAN testing only.</p>
   <label>Pi IP: <input id="piIp" value="${defaultPiIp}" style="width:140px" /></label>
   <label>Port: <input id="port" value="${defaultPort}" style="width:60px" /></label>
   <label>Path: <input id="path" value="camera1" style="width:100px" /></label>
@@ -153,6 +155,7 @@ app.use('/api/lobbies', lobbyRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/agents', agentRoutes);
 app.use('/api/monitoring', monitoringRoutes);
+app.post('/api/mediamtx/auth', mediamtxAuth);
 app.use('/api/cameras', cameraRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/analytics', analyticsRoutes);
