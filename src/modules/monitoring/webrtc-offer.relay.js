@@ -1,6 +1,8 @@
 import SocketPresence from '../realtime/socketPresence.model.js';
+import Device from '../divisions/device.model.js';
 
 const DEFAULT_SOCKET_TIMEOUT_MS = Number(process.env.MEDIAMTX_SOCKET_TIMEOUT_MS || 45000);
+const AGENT_ONLINE_GRACE_MS = Number(process.env.AGENT_ONLINE_GRACE_MS || 120000);
 
 const PRIVATE_IP_REGEX = /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.)/;
 
@@ -12,7 +14,15 @@ export async function isAgentOnline(deviceId) {
   const count = await SocketPresence.count({
     where: { device_id: deviceId, is_online: true },
   });
-  return count > 0;
+  if (count > 0) return true;
+
+  const device = await Device.findByPk(deviceId, {
+    attributes: ['status', 'last_seen_at'],
+  });
+  if (!device || device.status !== 'ONLINE') return false;
+  if (!device.last_seen_at) return false;
+  const ageMs = Date.now() - new Date(device.last_seen_at).getTime();
+  return ageMs >= 0 && ageMs <= AGENT_ONLINE_GRACE_MS;
 }
 
 export function proxyOfferViaSocket(io, deviceId, streamName, sdp, timeoutMs = DEFAULT_SOCKET_TIMEOUT_MS) {

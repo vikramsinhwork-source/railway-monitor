@@ -57,11 +57,6 @@ export async function proxyHlsSegment(req, res) {
   if (!device) return sendError(res, 'Device not found', 404);
 
   const streamName = req.params.streamName;
-  const agentOnline = await isAgentOnline(device.id);
-  if (!agentOnline) {
-    return sendError(res, 'Device is not connected (offline)', 503);
-  }
-
   const rawPath = rawRelativeHlsPathFromRequest(req);
   const { path: relativePath, mediamtxQuery } = parseRelativeHlsPath(rawPath, req.query);
   const authToken = String(req.query.token || req.query.access_token || '').trim();
@@ -97,6 +92,10 @@ export async function proxyHlsSegment(req, res) {
     return res.status(fetched.statusCode >= 200 && fetched.statusCode < 300 ? 200 : fetched.statusCode).send(body);
   } catch (err) {
     if (err?.code === 'SOCKET_TIMEOUT' || err?.name === 'AbortError') {
+      const reachable = await isAgentOnline(device.id);
+      if (!reachable) {
+        return sendError(res, 'Device is not connected (offline)', 503);
+      }
       return sendError(res, 'Pi agent did not respond in time', 504);
     }
     if (err?.code === 'SOCKET_RELAY_ERROR') {
