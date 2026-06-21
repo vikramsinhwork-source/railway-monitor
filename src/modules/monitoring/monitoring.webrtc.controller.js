@@ -132,6 +132,7 @@ export async function proxyWebrtcOffer(req, res) {
       ice_servers: DEFAULT_ICE_SERVERS,
       stream_token: streamToken.token,
       stream_token_expires_at: streamToken.expiresAt,
+      playback_ip: device.ip_address || null,
     },
   });
 }

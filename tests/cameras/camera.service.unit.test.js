@@ -14,8 +14,9 @@ describe('camera.service — WebRTC play URL', () => {
     assert.strictEqual(getWebrtcPlaybackMode({ PI_WEBRTC_PLAYBACK_MODE: 'direct' }), 'direct');
   });
 
-  test('getWebrtcPlaybackMode socket in production or when set', () => {
-    assert.strictEqual(getWebrtcPlaybackMode({ NODE_ENV: 'production' }), 'socket');
+  test('getWebrtcPlaybackMode hls in production or when set', () => {
+    assert.strictEqual(getWebrtcPlaybackMode({ NODE_ENV: 'production' }), 'hls');
+    assert.strictEqual(getWebrtcPlaybackMode({ PI_WEBRTC_PLAYBACK_MODE: 'hls' }), 'hls');
     assert.strictEqual(getWebrtcPlaybackMode({ PI_WEBRTC_PLAYBACK_MODE: 'socket' }), 'socket');
   });
 

@@ -5,6 +5,7 @@ import { requireDeviceAuth, requireOwnDevice } from './monitoring.middleware.js'
 import * as monitoringController from './monitoring.controller.js';
 import { getIceConfig } from './monitoring.ice.controller.js';
 import { proxyWebrtcOffer } from './monitoring.webrtc.controller.js';
+import { proxyHlsSegment, startStreamPlayback } from './hls-proxy.controller.js';
 
 const router = express.Router();
 
@@ -35,6 +36,26 @@ router.post(
   requireAuth,
   requireMonitor,
   proxyWebrtcOffer
+);
+
+router.post(
+  '/devices/:id/streams/:streamName/playback',
+  requireAuth,
+  requireMonitor,
+  startStreamPlayback
+);
+
+router.get(
+  '/devices/:id/streams/:streamName/hls/:subdir/:segmentFile',
+  requireAuthHeaderOrQuery,
+  requireMonitor,
+  proxyHlsSegment
+);
+router.get(
+  '/devices/:id/streams/:streamName/hls/:segmentFile',
+  requireAuthHeaderOrQuery,
+  requireMonitor,
+  proxyHlsSegment
 );
 
 // Admin / monitor endpoints

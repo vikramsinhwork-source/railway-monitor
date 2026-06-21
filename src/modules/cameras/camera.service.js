@@ -20,14 +20,15 @@ export function parseLegacyCameraId(id) {
   return { piDeviceId: match[1], mediamtxPath: match[2] };
 }
 
-/** @returns {'direct' | 'edge' | 'socket'} */
+/** @returns {'direct' | 'edge' | 'socket' | 'hls'} */
 export function getWebrtcPlaybackMode(env = process.env) {
   const explicit = String(env.PI_WEBRTC_PLAYBACK_MODE || '').trim().toLowerCase();
   if (explicit === 'edge') return 'edge';
   if (explicit === 'direct') return 'direct';
   if (explicit === 'socket') return 'socket';
+  if (explicit === 'hls') return 'hls';
   if (String(env.NODE_ENV || '').trim().toLowerCase() === 'production') {
-    return 'socket';
+    return 'hls';
   }
   return 'direct';
 }
