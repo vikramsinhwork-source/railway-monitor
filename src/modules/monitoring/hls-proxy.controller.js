@@ -3,7 +3,7 @@ import Device from '../divisions/device.model.js';
 import { getWebrtcPlaybackMode } from '../cameras/camera.service.js';
 import { getMonitoringDeviceForUser } from './monitoring.service.js';
 import { isAgentOnline } from './webrtc-offer.relay.js';
-import { fetchHlsFromAgent, rewriteHlsManifest } from './hls-proxy.relay.js';
+import { fetchHlsFromAgent, parseRelativeHlsPath, rewriteHlsManifest } from './hls-proxy.relay.js';
 
 function ensureAccessResult(result, res) {
   if (!result) {
@@ -27,7 +27,7 @@ function requestBaseUrl(req) {
   return `${proto}://${host}`;
 }
 
-function normalizeRelativeHlsPath(req) {
+function rawRelativeHlsPathFromRequest(req) {
   const fromParam = req.params.hlsPath || req.params.segmentFile;
   if (fromParam) {
     if (req.params.subdir) {
@@ -62,11 +62,15 @@ export async function proxyHlsSegment(req, res) {
     return sendError(res, 'Device is not connected (offline)', 503);
   }
 
-  const relativePath = normalizeRelativeHlsPath(req);
+  const rawPath = rawRelativeHlsPathFromRequest(req);
+  const { path: relativePath, mediamtxQuery } = parseRelativeHlsPath(rawPath, req.query);
+  const authToken = String(req.query.token || req.query.access_token || '').trim();
 
   try {
     const io = req.app?.get?.('io');
-    const fetched = await fetchHlsFromAgent(io, device.id, streamName, relativePath);
+    const fetched = await fetchHlsFromAgent(io, device.id, streamName, relativePath, {
+      mediamtxQuery,
+    });
     let { body, contentType } = fetched;
 
     const isManifest =
@@ -80,6 +84,7 @@ export async function proxyHlsSegment(req, res) {
         piDeviceId: device.id,
         streamName,
         apiPrefix: requestBaseUrl(req),
+        authToken,
       });
       body = Buffer.from(text, 'utf8');
       contentType = 'application/vnd.apple.mpegurl';
@@ -88,6 +93,7 @@ export async function proxyHlsSegment(req, res) {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     return res.status(fetched.statusCode >= 200 && fetched.statusCode < 300 ? 200 : fetched.statusCode).send(body);
   } catch (err) {
     if (err?.code === 'SOCKET_TIMEOUT' || err?.name === 'AbortError') {
