@@ -45,22 +45,19 @@ export async function signup(req, res) {
       email: email !== undefined ? email || null : null,
       password_hash,
       role: 'USER',
-      status: 'ACTIVE',
+      status: 'PENDING_APPROVAL',
       created_by: null,
       crew_type: crew_type !== undefined ? crew_type || null : null,
       head_quarter: head_quarter !== undefined ? head_quarter || null : null,
       mobile: mobile !== undefined ? mobile || null : null,
     });
 
-    logInfo('Auth', 'Self-signup', { user_id: user.user_id });
-
-    const accessToken = signAccessToken(user);
+    logInfo('Auth', 'Self-signup pending approval', { user_id: user.user_id });
 
     return res.status(201).json({
       success: true,
-      accessToken,
-      role: user.role,
-      user: await toUserResponse(user),
+      message: 'Registration submitted. Your account is pending admin approval.',
+      user_id: user.user_id,
     });
   } catch (err) {
     if (err.name === 'SequelizeUniqueConstraintError') {
@@ -100,6 +97,15 @@ export async function login(req, res) {
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
+      });
+    }
+
+    if (user.status === 'PENDING_APPROVAL') {
+      logWarn('Auth', 'Login failed: pending approval', { user_id });
+      return res.status(403).json({
+        success: false,
+        error: 'ACCOUNT_PENDING_APPROVAL',
+        message: 'Your account is awaiting admin approval.',
       });
     }
 

@@ -26,6 +26,8 @@ const USER_RESPONSE_ATTRIBUTES = [
   'role',
   'division_id',
   'status',
+  'approved_by',
+  'approved_at',
   'created_at',
   'updated_at',
   'crew_type',
@@ -42,6 +44,30 @@ function currentRole(req) {
 
 function isDivisionAdmin(req) {
   return currentRole(req) === 'DIVISION_ADMIN';
+}
+
+function adminDivisionId(req) {
+  return req.user?.division_id || req.auth?.division_id || null;
+}
+
+async function findPendingUserForAdmin(req, id) {
+  const user = await User.findByPk(id);
+  if (!user) {
+    return { error: { status: 404, message: 'User not found' } };
+  }
+  if (user.status !== 'PENDING_APPROVAL') {
+    return { error: { status: 400, message: 'User is not pending approval' } };
+  }
+  if (isDivisionAdmin(req)) {
+    const divisionId = adminDivisionId(req);
+    if (!divisionId) {
+      return { error: { status: 400, message: 'Division admin missing division mapping' } };
+    }
+    if (user.division_id !== divisionId) {
+      return { error: { status: 403, message: 'Division access denied' } };
+    }
+  }
+  return { user };
 }
 
 /** List endpoint historically omitted updated_at */
@@ -134,12 +160,14 @@ export async function listUsers(req, res) {
     }
 
     if (status) {
-      const validStatus = ['ACTIVE', 'INACTIVE'].includes(status.toUpperCase()) ? status.toUpperCase() : null;
+      const validStatus = ['ACTIVE', 'INACTIVE', 'PENDING_APPROVAL'].includes(status.toUpperCase())
+        ? status.toUpperCase()
+        : null;
       if (validStatus) where.status = validStatus;
     }
 
     if (isDivisionAdmin(req)) {
-      const divisionId = req.user?.division_id || req.auth?.division_id || null;
+      const divisionId = adminDivisionId(req);
       if (!divisionId) {
         return res.status(400).json({ success: false, message: 'Division admin missing division mapping' });
       }
@@ -159,6 +187,87 @@ export async function listUsers(req, res) {
   } catch (err) {
     logWarn('Users', 'List users error', { error: err.message });
     return res.status(500).json({ success: false, message: 'Failed to list users' });
+  }
+}
+
+export async function listPendingUsers(req, res) {
+  try {
+    const where = { status: 'PENDING_APPROVAL' };
+
+    if (isDivisionAdmin(req)) {
+      const divisionId = adminDivisionId(req);
+      if (!divisionId) {
+        return res.status(400).json({ success: false, message: 'Division admin missing division mapping' });
+      }
+      where.division_id = divisionId;
+    }
+
+    const users = await User.findAll({
+      attributes: [...LIST_USER_RESPONSE_ATTRIBUTES, 'profile_image_key'],
+      where,
+      order: [['created_at', 'DESC']],
+    });
+
+    return res.json({ success: true, users: await toUserResponses(users) });
+  } catch (err) {
+    logWarn('Users', 'List pending users error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to list pending users' });
+  }
+}
+
+export async function approveUser(req, res) {
+  try {
+    const { id } = req.params;
+    const result = await findPendingUserForAdmin(req, id);
+    if (result.error) {
+      return res.status(result.error.status).json({ success: false, message: result.error.message });
+    }
+
+    const adminId = req.auth.userId;
+    await result.user.update({
+      status: 'ACTIVE',
+      approved_by: adminId,
+      approved_at: new Date(),
+    });
+    await result.user.reload();
+
+    logInfo('Users', 'User approved', { user_id: result.user.user_id, approved_by: adminId });
+
+    return res.json({
+      success: true,
+      user: await toUserResponse(result.user),
+    });
+  } catch (err) {
+    logWarn('Users', 'Approve user error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to approve user' });
+  }
+}
+
+export async function rejectUser(req, res) {
+  try {
+    const { id } = req.params;
+    const result = await findPendingUserForAdmin(req, id);
+    if (result.error) {
+      return res.status(result.error.status).json({ success: false, message: result.error.message });
+    }
+
+    const adminId = req.auth.userId;
+    await result.user.update({
+      status: 'INACTIVE',
+      approved_by: adminId,
+      approved_at: new Date(),
+    });
+    await result.user.reload();
+
+    logInfo('Users', 'User rejected', { user_id: result.user.user_id, rejected_by: adminId });
+
+    return res.json({
+      success: true,
+      user: await toUserResponse(result.user),
+    });
+  } catch (err) {
+    logWarn('Users', 'Reject user error', { error: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to reject user' });
   }
 }
 

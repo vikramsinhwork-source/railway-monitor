@@ -17,18 +17,47 @@ async function restJson(path, options = {}) {
   return { status: res.status, data };
 }
 
-test('GET /api/users/me/face/status — USER: not enrolled when no active profile', async () => {
-  const user_id = `face_user_${Date.now()}`;
+async function signupAndApprove(user_id, password) {
   const signup = await restJson('/api/auth/signup', {
     method: 'POST',
     body: JSON.stringify({
       user_id,
       name: 'Face Test User',
-      password: 'face_test_pw_1',
+      password,
     }),
   });
   assert.strictEqual(signup.status, 201, JSON.stringify(signup.data));
-  const token = signup.data.accessToken;
+
+  const adminLogin = await restJson('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ user_id: 'admin', password: 'admin123' }),
+  });
+  assert.strictEqual(adminLogin.status, 200, JSON.stringify(adminLogin.data));
+
+  const pending = await restJson('/api/users/pending', {
+    headers: { Authorization: `Bearer ${adminLogin.data.accessToken}` },
+  });
+  assert.strictEqual(pending.status, 200, JSON.stringify(pending.data));
+  const match = pending.data.users.find((u) => u.user_id === user_id);
+  assert.ok(match, `Pending user ${user_id} not found`);
+
+  const approve = await restJson(`/api/users/${match.id}/approve`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${adminLogin.data.accessToken}` },
+  });
+  assert.strictEqual(approve.status, 200, JSON.stringify(approve.data));
+
+  const login = await restJson('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ user_id, password }),
+  });
+  assert.strictEqual(login.status, 200, JSON.stringify(login.data));
+  return login.data.accessToken;
+}
+
+test('GET /api/users/me/face/status — USER: not enrolled when no active profile', async () => {
+  const user_id = `face_user_${Date.now()}`;
+  const token = await signupAndApprove(user_id, 'face_test_pw_1');
 
   const status = await restJson('/api/users/me/face/status', {
     headers: { Authorization: `Bearer ${token}` },
@@ -66,16 +95,7 @@ test('POST /api/users/me/face/enroll — 503 when Rekognition/S3 not fully confi
   }
 
   const user_id = `face_enroll_${Date.now()}`;
-  const signup = await restJson('/api/auth/signup', {
-    method: 'POST',
-    body: JSON.stringify({
-      user_id,
-      name: 'Face Enroll User',
-      password: 'face_enroll_pw_1',
-    }),
-  });
-  assert.strictEqual(signup.status, 201, JSON.stringify(signup.data));
-  const token = signup.data.accessToken;
+  const token = await signupAndApprove(user_id, 'face_enroll_pw_1');
 
   const jpeg = Buffer.from(
     '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAAaABoDASIAAhEBAxEB/8QAFwABAQEBAAAAAAAAAAAAAAAAAAMBBP/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGf/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9k=',

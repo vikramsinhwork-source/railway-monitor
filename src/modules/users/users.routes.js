@@ -3,7 +3,8 @@
  * POST /api/users, GET /api/users, GET /api/users/me, PATCH /api/users/me,
  * POST /api/users/me/avatar, GET /api/users/me/face/status, POST /api/users/me/face/enroll,
  * GET /api/users/:id, PATCH /api/users/:id,
- * PATCH /api/users/:id/deactivate, POST /api/users/:id/avatar (admin).
+ * PATCH /api/users/:id/deactivate, POST /api/users/:id/avatar (admin),
+ * GET /api/users/pending, PATCH /api/users/:id/approve, PATCH /api/users/:id/reject.
  */
 
 import express from 'express';
@@ -16,6 +17,7 @@ const router = express.Router();
 
 router.post('/', requireAuth, requireDivisionAdmin, usersController.createUser);
 router.get('/', requireAuth, requireDivisionAdmin, usersController.listUsers);
+router.get('/pending', requireAuth, requireDivisionAdmin, usersController.listPendingUsers);
 router.get('/me', requireAuth, usersController.me);
 router.patch('/me', requireAuth, usersController.patchMe);
 router.post(
@@ -35,6 +37,8 @@ router.post(
   usersController.enrollMyFace
 );
 router.get('/:id', requireAuth, requireDivisionAdmin, usersController.getUserById);
+router.patch('/:id/approve', requireAuth, requireDivisionAdmin, usersController.approveUser);
+router.patch('/:id/reject', requireAuth, requireDivisionAdmin, usersController.rejectUser);
 router.patch('/:id/deactivate', requireAuth, requireDivisionAdmin, usersController.deactivateUser);
 router.post(
   '/:id/avatar',
