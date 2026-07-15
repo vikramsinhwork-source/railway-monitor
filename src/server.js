@@ -68,23 +68,16 @@ const corsOptions = {
 };
 initModels();
 
-async function backfillMissingUserEmails() {
-  // Required before making users.email NOT NULL via sync({ alter: true }).
-  await sequelize.query(`
-    UPDATE users
-    SET email = LOWER(REGEXP_REPLACE(user_id, '[^a-zA-Z0-9._+-]+', '', 'g')) || '@users.local'
-    WHERE email IS NULL OR BTRIM(email) = ''
-  `);
-}
-
 async function initDB() {
   try {
     assertDatabaseEnv();
     await sequelize.authenticate();
     logInfo('DB', 'Sequelize authenticated');
     await ensureCollection();
-    await backfillMissingUserEmails();
-    await sequelize.sync({ alter: true });
+    // Create missing tables only. Schema changes belong in migrations
+    // (`npx sequelize-cli db:migrate`) — avoid sync({ alter: true }), which
+    // locks tables for minutes and deadlocks with health/presence writers.
+    await sequelize.sync();
     logInfo('DB', 'Sequelize synced');
     await seedAdmin();
     await seedRoleDutyTemplates();
@@ -344,17 +337,17 @@ const io = new Server(server, {
 io.use(authenticateSocket);
 logInfo('Server', 'Authentication middleware applied to Socket.IO');
 
-// Initialize socket event handlers
+// Initialize socket event handlers (background DB writers start after initDB)
 app.set('io', io);
 initializeSocket(io);
-startDeviceHealthScheduler(io);
-startStreamIdleCleanup(io);
 logInfo('Server', 'Socket event handlers initialized');
 
 const PORT = process.env.PORT || 3000;
 
 initDB()
   .then(() => {
+    startDeviceHealthScheduler(io);
+    startStreamIdleCleanup(io);
     server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
