@@ -28,12 +28,20 @@ const User = sequelize.define(
     },
     email: {
       type: DataTypes.STRING(150),
-      allowNull: true,
+      allowNull: false,
       unique: true,
     },
     password_hash: {
       type: DataTypes.TEXT,
       allowNull: false,
+    },
+    password_reset_token_hash: {
+      type: DataTypes.STRING(128),
+      allowNull: true,
+    },
+    password_reset_expires: {
+      type: DataTypes.DATE,
+      allowNull: true,
     },
     role: {
       type: DataTypes.ENUM('SUPER_ADMIN', 'DIVISION_ADMIN', 'MONITOR', 'USER'),
@@ -101,7 +109,9 @@ const User = sequelize.define(
       },
     ],
     defaultScope: {
-      attributes: { exclude: ['password_hash'] },
+      attributes: {
+        exclude: ['password_hash', 'password_reset_token_hash'],
+      },
     },
   }
 );

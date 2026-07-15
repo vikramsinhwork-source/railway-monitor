@@ -53,12 +53,12 @@ const options = {
         },
         SignupRequest: {
           type: 'object',
-          required: ['user_id', 'name', 'password'],
+          required: ['user_id', 'name', 'email', 'password'],
           properties: {
             user_id: { type: 'string', example: 'crew_001' },
             name: { type: 'string', example: 'Ravi Kumar' },
             password: { type: 'string' },
-            email: { type: 'string', nullable: true },
+            email: { type: 'string', example: 'crew001@example.com' },
             crew_type: { type: 'string', nullable: true },
             head_quarter: { type: 'string', nullable: true },
             mobile: { type: 'string', nullable: true },
@@ -66,15 +66,31 @@ const options = {
         },
         CreateUserRequest: {
           type: 'object',
-          required: ['user_id', 'name', 'password'],
+          required: ['user_id', 'name', 'email', 'password'],
           properties: {
             user_id: { type: 'string' },
             name: { type: 'string' },
             password: { type: 'string' },
-            email: { type: 'string', nullable: true },
+            email: { type: 'string', example: 'user@example.com' },
             crew_type: { type: 'string', nullable: true },
             head_quarter: { type: 'string', nullable: true },
             mobile: { type: 'string', nullable: true },
+          },
+        },
+        ForgotPasswordRequest: {
+          type: 'object',
+          required: ['email'],
+          properties: {
+            email: { type: 'string', example: 'user@example.com' },
+          },
+        },
+        ResetPasswordRequest: {
+          type: 'object',
+          required: ['token', 'password'],
+          properties: {
+            token: { type: 'string', description: 'One-time token from the reset email link' },
+            password: { type: 'string', minLength: 6 },
+            newPassword: { type: 'string', minLength: 6, description: 'Alias for password' },
           },
         },
         UserResponse: {
@@ -83,7 +99,7 @@ const options = {
             id: { type: 'string', format: 'uuid' },
             user_id: { type: 'string' },
             name: { type: 'string' },
-            email: { type: 'string', nullable: true },
+            email: { type: 'string' },
             role: { type: 'string', enum: ['ADMIN', 'USER'] },
             status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] },
             created_at: { type: 'string', format: 'date-time' },
@@ -367,6 +383,73 @@ spec.paths['/api/auth/signup'] = {
       },
       400: { description: 'Missing required fields', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
       409: { description: 'user_id or email already exists', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/auth/forgot-password'] = {
+  post: {
+    tags: ['Auth'],
+    summary: 'Request password reset email',
+    description:
+      'Accepts an email address. If a matching ACTIVE user exists, sends a one-time reset link via Resend. Always returns a generic success message when the email format is valid.',
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/ForgotPasswordRequest' },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Generic success (does not reveal whether the account exists)',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                success: { type: 'boolean' },
+                message: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      400: { description: 'Invalid email', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      502: { description: 'Email provider failed', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+    },
+  },
+};
+spec.paths['/api/auth/reset-password'] = {
+  post: {
+    tags: ['Auth'],
+    summary: 'Reset password with email token',
+    description: 'Consumes the one-time token from the forgot-password email and sets a new password.',
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/ResetPasswordRequest' },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: 'Password updated',
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                success: { type: 'boolean' },
+                message: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      400: { description: 'Invalid/expired token or weak password', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+      403: { description: 'Account inactive', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
     },
   },
 };

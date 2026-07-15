@@ -68,12 +68,22 @@ const corsOptions = {
 };
 initModels();
 
+async function backfillMissingUserEmails() {
+  // Required before making users.email NOT NULL via sync({ alter: true }).
+  await sequelize.query(`
+    UPDATE users
+    SET email = LOWER(REGEXP_REPLACE(user_id, '[^a-zA-Z0-9._+-]+', '', 'g')) || '@users.local'
+    WHERE email IS NULL OR BTRIM(email) = ''
+  `);
+}
+
 async function initDB() {
   try {
     assertDatabaseEnv();
     await sequelize.authenticate();
     logInfo('DB', 'Sequelize authenticated');
     await ensureCollection();
+    await backfillMissingUserEmails();
     await sequelize.sync({ alter: true });
     logInfo('DB', 'Sequelize synced');
     await seedAdmin();
@@ -244,7 +254,15 @@ app.use('/api/streams', streamRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/analytics', analyticsRoutes);
 logInfo('Server', 'Auth and user routes registered', {
-  auth: ['/api/auth/login', '/api/auth/signup', '/api/auth/device-token', '/api/auth/register', '/api/auth/users'],
+  auth: [
+    '/api/auth/login',
+    '/api/auth/signup',
+    '/api/auth/forgot-password',
+    '/api/auth/reset-password',
+    '/api/auth/device-token',
+    '/api/auth/register',
+    '/api/auth/users',
+  ],
   users: [
     '/api/users',
     '/api/users/me',

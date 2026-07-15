@@ -17,6 +17,7 @@ import {
 } from '../../services/s3Avatar.js';
 import { enrollFace, deleteFace, recognizeFace } from '../../services/rekognitionFace.js';
 import { normalizeRole } from '../../middleware/rbac.middleware.js';
+import { isValidEmail, normalizeEmail } from '../../utils/email.js';
 
 const USER_RESPONSE_ATTRIBUTES = [
   'id',
@@ -87,10 +88,17 @@ function extFromMime(mime) {
 export async function createUser(req, res) {
   try {
     const { user_id, name, password, email, crew_type, head_quarter, mobile } = req.body;
-    if (!user_id || !name || !password) {
+    if (!user_id || !name || !password || !email) {
       return res.status(400).json({
         success: false,
-        message: 'user_id, name, and password are required',
+        message: 'user_id, name, email, and password are required',
+      });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'email is invalid',
       });
     }
 
@@ -109,7 +117,7 @@ export async function createUser(req, res) {
     const user = await User.create({
       user_id,
       name,
-      email: email !== undefined ? email || null : null,
+      email: normalizeEmail(email),
       password_hash,
       role: 'USER',
       status: 'ACTIVE',
@@ -309,7 +317,12 @@ export async function updateUser(req, res) {
 
     const updates = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email || null;
+    if (email !== undefined) {
+      if (!isValidEmail(email)) {
+        return res.status(400).json({ success: false, message: 'email is invalid' });
+      }
+      updates.email = normalizeEmail(email);
+    }
     if (password !== undefined && password.trim()) {
       updates.password_hash = await bcrypt.hash(password, 10);
     }
@@ -414,7 +427,12 @@ export async function patchMe(req, res) {
 
     const updates = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email || null;
+    if (email !== undefined) {
+      if (!isValidEmail(email)) {
+        return res.status(400).json({ success: false, message: 'email is invalid' });
+      }
+      updates.email = normalizeEmail(email);
+    }
     if (password !== undefined && String(password).trim()) {
       updates.password_hash = await bcrypt.hash(password, 10);
     }

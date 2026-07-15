@@ -57,10 +57,29 @@ router.post('/login', (req, res, next) => {
  * POST /api/auth/signup
  *
  * Public self-registration: creates DB user with role USER, status ACTIVE.
- * Body: user_id, name, password (required); email, crew_type, head_quarter, mobile (optional).
+ * Body: user_id, name, email, password (required); crew_type, head_quarter, mobile (optional).
  */
 router.post('/signup', (req, res, next) => {
   authController.signup(req, res).catch(next);
+});
+
+/**
+ * POST /api/auth/forgot-password
+ *
+ * Body: { email }. Always returns a generic success message when the email is valid.
+ * Sends a Resend email with a one-time reset link when the account exists and is ACTIVE.
+ */
+router.post('/forgot-password', (req, res, next) => {
+  authController.forgotPassword(req, res).catch(next);
+});
+
+/**
+ * POST /api/auth/reset-password
+ *
+ * Body: { token, password } (newPassword accepted as alias for password).
+ */
+router.post('/reset-password', (req, res, next) => {
+  authController.resetPassword(req, res).catch(next);
 });
 
 /**

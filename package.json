@@ -36,6 +36,7 @@
     "multer": "^2.1.1",
     "pg": "^8.13.0",
     "pg-hstore": "^2.3.4",
+    "resend": "^6.17.2",
     "sequelize": "^6.37.0",
     "socket.io": "^4.7.2",
     "swagger-jsdoc": "^6.2.8",
