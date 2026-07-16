@@ -12,6 +12,7 @@ import { logInfo, logWarn } from '../../utils/logger.js';
 import { toUserResponse } from '../users/userResponse.js';
 import { normalizeRole } from '../../middleware/rbac.middleware.js';
 import { isValidEmail, normalizeEmail } from '../../utils/email.js';
+import { resolveSignupStatus } from '../../utils/signupApproval.js';
 import { sendPasswordResetEmail } from '../../services/email.service.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'demo-secret-key-change-in-production';
@@ -64,18 +65,30 @@ export async function signup(req, res) {
     }
 
     const password_hash = await bcrypt.hash(password, 10);
+    const status = resolveSignupStatus();
     const user = await User.create({
       user_id,
       name,
       email: normalizeEmail(email),
       password_hash,
       role: 'USER',
-      status: 'PENDING_APPROVAL',
+      status,
+      approved_at: status === 'ACTIVE' ? new Date() : null,
       created_by: null,
       crew_type: crew_type !== undefined ? crew_type || null : null,
       head_quarter: head_quarter !== undefined ? head_quarter || null : null,
       mobile: mobile !== undefined ? mobile || null : null,
     });
+
+    if (status === 'ACTIVE') {
+      logInfo('Auth', 'Self-signup auto-approved', { user_id: user.user_id });
+      return res.status(201).json({
+        success: true,
+        message: 'Registration successful. You can log in now.',
+        user_id: user.user_id,
+        status,
+      });
+    }
 
     logInfo('Auth', 'Self-signup pending approval', { user_id: user.user_id });
 
@@ -83,6 +96,7 @@ export async function signup(req, res) {
       success: true,
       message: 'Registration submitted. Your account is pending admin approval.',
       user_id: user.user_id,
+      status,
     });
   } catch (err) {
     if (err.name === 'SequelizeUniqueConstraintError') {

@@ -9,6 +9,7 @@ import { authenticateSocket } from './auth/auth.middleware.js';
 import { initializeSocket } from './socket/index.js';
 import { seedAdmin } from './bootstrap/seedAdmin.js';
 import { seedRoleDutyTemplates } from './bootstrap/seedRoleDutyTemplates.js';
+import { approvePendingUsersIfAutoApprove } from './bootstrap/approvePendingUsers.js';
 import { logInfo, logWarn, logError } from './utils/logger.js';
 import authRoutes from './auth/auth.routes.js';
 import usersRoutes from './modules/users/users.routes.js';
@@ -81,6 +82,7 @@ async function initDB() {
     logInfo('DB', 'Sequelize synced');
     await seedAdmin();
     await seedRoleDutyTemplates();
+    await approvePendingUsersIfAutoApprove();
   } catch (err) {
     logError('DB', 'Init failed', { error: formatDbInitError(err) });
     throw err;

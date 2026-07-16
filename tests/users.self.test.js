@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert';
 import { login, rest } from './helpers/http.js';
 import { USERS } from './helpers/fixtures.js';
+import { isSignupAutoApproveEnabled } from '../src/utils/signupApproval.js';
 
 async function signupUser(user_id, password = 'test_pw_1', extra = {}) {
   return rest('/api/auth/signup', {
@@ -9,6 +10,7 @@ async function signupUser(user_id, password = 'test_pw_1', extra = {}) {
     body: JSON.stringify({
       user_id,
       name: 'Pending Test User',
+      email: `${user_id}@example.com`,
       password,
       ...extra,
     }),
@@ -28,9 +30,10 @@ async function approveUserByUserId(adminToken, user_id) {
   });
 }
 
-test('POST /api/auth/signup creates PENDING_APPROVAL user without JWT', async () => {
+test('POST /api/auth/signup creates user without JWT; pending or auto-approved', async () => {
   const user_id = `pending_signup_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
   const password = 'signup_secret_1';
+  const autoApprove = isSignupAutoApproveEnabled();
 
   const signup = await signupUser(user_id, password, {
     name: 'Self Signup User',
@@ -41,14 +44,29 @@ test('POST /api/auth/signup creates PENDING_APPROVAL user without JWT', async ()
 
   assert.strictEqual(signup.status, 201, JSON.stringify(signup.data));
   assert.strictEqual(signup.data.success, true);
-  assert.strictEqual(
-    signup.data.message,
-    'Registration submitted. Your account is pending admin approval.'
-  );
   assert.strictEqual(signup.data.user_id, user_id);
   assert.strictEqual(signup.data.accessToken, undefined);
   assert.strictEqual(signup.data.user, undefined);
   assert.strictEqual(signup.data.password_hash, undefined);
+
+  if (autoApprove) {
+    assert.strictEqual(signup.data.status, 'ACTIVE');
+    assert.strictEqual(signup.data.message, 'Registration successful. You can log in now.');
+
+    const loginAfter = await rest('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ user_id, password }),
+    });
+    assert.strictEqual(loginAfter.status, 200, JSON.stringify(loginAfter.data));
+    assert.strictEqual(loginAfter.data.user.user_id, user_id);
+    return;
+  }
+
+  assert.strictEqual(signup.data.status, 'PENDING_APPROVAL');
+  assert.strictEqual(
+    signup.data.message,
+    'Registration submitted. Your account is pending admin approval.'
+  );
 
   const blockedLogin = await rest('/api/auth/login', {
     method: 'POST',
@@ -95,7 +113,10 @@ test('POST /api/auth/signup validation and unique constraints', async () => {
   assert.strictEqual(dupEmail.status, 409);
 });
 
-test('Admin approve/reject enforces role and division scoping', async () => {
+test(
+  'Admin approve/reject enforces role and division scoping',
+  { skip: isSignupAutoApproveEnabled() && 'Requires PENDING_APPROVAL signups (auto-approve window open)' },
+  async () => {
   const user_id = `scope_user_${Date.now()}`;
   const password = 'scope_pw_1';
   const signup = await signupUser(user_id, password);
@@ -135,7 +156,8 @@ test('Admin approve/reject enforces role and division scoping', async () => {
   });
   assert.strictEqual(inactiveLogin.status, 403, JSON.stringify(inactiveLogin.data));
   assert.notStrictEqual(inactiveLogin.data.error, 'ACCOUNT_PENDING_APPROVAL');
-});
+  }
+);
 
 test('GET /api/users/pending requires admin auth', async () => {
   const noAuth = await rest('/api/users/pending');
