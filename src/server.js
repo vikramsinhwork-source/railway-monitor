@@ -9,12 +9,14 @@ import { authenticateSocket } from './auth/auth.middleware.js';
 import { initializeSocket } from './socket/index.js';
 import { seedAdmin } from './bootstrap/seedAdmin.js';
 import { seedRoleDutyTemplates } from './bootstrap/seedRoleDutyTemplates.js';
+import { seedClientRegisters } from './modules/registers/seedClientRegisters.js';
 import { approvePendingUsersIfAutoApprove } from './bootstrap/approvePendingUsers.js';
 import { logInfo, logWarn, logError } from './utils/logger.js';
 import authRoutes from './auth/auth.routes.js';
 import usersRoutes from './modules/users/users.routes.js';
 import { initModels } from './models/index.js';
 import formsRoutes from './modules/forms/forms.routes.js';
+import registerRoutes from './modules/registers/register.routes.js';
 import divisionRoutes from './modules/divisions/division.route.js';
 import lobbyRoutes from './modules/lobbies/lobby.route.js';
 import deviceRoutes from './modules/devices/device.route.js';
@@ -63,7 +65,7 @@ const server = createServer(app);
 
 const corsOptions = {
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 204,
 };
@@ -82,6 +84,7 @@ async function initDB() {
     logInfo('DB', 'Sequelize synced');
     await seedAdmin();
     await seedRoleDutyTemplates();
+    await seedClientRegisters();
     await approvePendingUsersIfAutoApprove();
   } catch (err) {
     logError('DB', 'Init failed', { error: formatDbInitError(err) });
@@ -240,6 +243,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/face', faceRoutes);
 app.use('/api/forms', formsRoutes);
+app.use('/api/registers', registerRoutes);
 app.use('/api/divisions', divisionRoutes);
 app.use('/api/lobbies', lobbyRoutes);
 app.use('/api/devices', deviceRoutes);
@@ -282,6 +286,15 @@ logInfo('Server', 'Auth and user routes registered', {
     '/api/forms/analytics/export',
     '/api/forms/analytics/users',
     '/api/forms/analytics/users/:userId/history',
+  ],
+  registers: [
+    '/api/registers',
+    '/api/registers/:id',
+    '/api/registers/:id/questions',
+    '/api/registers/:id/entries',
+    '/api/registers/:id/analytics/summary',
+    '/api/registers/:id/export/preview',
+    '/api/registers/:id/export',
   ],
   divisions: [
     '/api/divisions',
@@ -327,7 +340,7 @@ logInfo('Server', 'Auth and user routes registered', {
 const io = new Server(server, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   },
   // Use authentication middleware for all connections

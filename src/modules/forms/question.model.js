@@ -1,6 +1,18 @@
 import { DataTypes } from 'sequelize';
 import sequelize from '../../config/sequelize.js';
 
+export const QUESTION_FIELD_TYPES = [
+  'TEXT',
+  'LONG_TEXT',
+  'NUMBER',
+  'DATE',
+  'TIME',
+  'DATETIME',
+  'YES_NO',
+  'DROPDOWN',
+  'SIGNATURE',
+];
+
 const Question = sequelize.define(
   'Question',
   {
@@ -22,6 +34,22 @@ const Question = sequelize.define(
     prompt: {
       type: DataTypes.TEXT,
       allowNull: false,
+    },
+    field_type: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+      defaultValue: 'TEXT',
+      validate: {
+        isIn: [QUESTION_FIELD_TYPES],
+      },
+    },
+    options: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+    },
+    key: {
+      type: DataTypes.STRING(80),
+      allowNull: true,
     },
     is_required: {
       type: DataTypes.BOOLEAN,

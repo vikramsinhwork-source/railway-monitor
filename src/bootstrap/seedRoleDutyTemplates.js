@@ -23,6 +23,9 @@ async function cloneQuestions(sourceFormId, targetFormId) {
     sourceQuestions.map((question) => ({
       form_id: targetFormId,
       prompt: question.prompt,
+      field_type: question.field_type || 'TEXT',
+      options: question.options ?? null,
+      key: question.key ?? null,
       is_required: question.is_required,
       sort_order: question.sort_order,
     }))

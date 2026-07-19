@@ -5,6 +5,7 @@ import User from '../users/user.model.js';
 import { toUserResponse } from '../users/userResponse.js';
 import { Form, Question, Submission, Answer } from './index.js';
 import { logInfo, logWarn, logError } from '../../utils/logger.js';
+import { parseQuestionFieldExtras, validateAnswerForFieldType } from './questionFieldTypes.js';
 
 function isValidUuid(value) {
   if (typeof value !== 'string') return false;
@@ -74,8 +75,17 @@ function parseQuestionPayload(body, { partial = false } = {}) {
     updates.sort_order = 0;
   }
 
+  const { updates: fieldUpdates, errors: fieldErrors } = parseQuestionFieldExtras(body, { partial });
+  if (fieldErrors.length > 0) {
+    return { error: fieldErrors[0] };
+  }
+  Object.assign(updates, fieldUpdates);
+
   if (partial && Object.keys(updates).length === 0) {
-    return { error: 'No valid fields to update. Provide prompt, is_required, or sort_order.' };
+    return {
+      error:
+        'No valid fields to update. Provide prompt, is_required, sort_order, field_type, options, or key.',
+    };
   }
 
   return { updates };
@@ -804,7 +814,7 @@ export async function getTodayQuestions(req, res) {
     const questions = await Question.findAll({
       where: { form_id: activeForm.id },
       order: [['sort_order', 'ASC'], ['created_at', 'ASC']],
-      attributes: ['id', 'prompt', 'is_required', 'sort_order'],
+      attributes: ['id', 'prompt', 'field_type', 'options', 'key', 'is_required', 'sort_order'],
     });
 
     return res.json({
@@ -896,6 +906,20 @@ export async function submitTodayAnswers(req, res) {
       if (seenQuestionIds.has(questionId)) {
         await tx.rollback();
         return res.status(400).json({ success: false, message: `Duplicate answer for question ${questionId}` });
+      }
+
+      const question = questionMap.get(questionId);
+      const typeError = validateAnswerForFieldType(
+        question.field_type || 'TEXT',
+        answerText,
+        question.options
+      );
+      if (typeError) {
+        await tx.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `answers[${index}]: ${typeError}`,
+        });
       }
 
       seenQuestionIds.add(questionId);

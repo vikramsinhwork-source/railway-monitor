@@ -196,6 +196,23 @@ const options = {
             prompt: { type: 'string', example: 'What did you work on today?' },
             is_required: { type: 'boolean', example: true },
             sort_order: { type: 'integer', minimum: 0, example: 0 },
+            field_type: {
+              type: 'string',
+              enum: ['TEXT', 'LONG_TEXT', 'NUMBER', 'DATE', 'TIME', 'DATETIME', 'YES_NO', 'DROPDOWN', 'SIGNATURE'],
+              example: 'TEXT',
+            },
+            options: {
+              type: 'array',
+              items: { type: 'string' },
+              nullable: true,
+              example: ['LP', 'ALP', 'TM'],
+            },
+            key: {
+              type: 'string',
+              nullable: true,
+              example: 'train_no',
+              description: 'Stable lowercase slug unique per form',
+            },
           },
         },
         UpdateQuestionRequest: {
@@ -204,6 +221,60 @@ const options = {
             prompt: { type: 'string' },
             is_required: { type: 'boolean' },
             sort_order: { type: 'integer', minimum: 0 },
+            field_type: {
+              type: 'string',
+              enum: ['TEXT', 'LONG_TEXT', 'NUMBER', 'DATE', 'TIME', 'DATETIME', 'YES_NO', 'DROPDOWN', 'SIGNATURE'],
+            },
+            options: {
+              type: 'array',
+              items: { type: 'string' },
+              nullable: true,
+            },
+            key: { type: 'string', nullable: true },
+          },
+        },
+        Register: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            name: { type: 'string' },
+            description: { type: 'string', nullable: true },
+            is_active: { type: 'boolean' },
+            staff_type: { type: 'string', nullable: true, enum: ['ALP', 'LP', 'TM'] },
+            duty_type: { type: 'string', nullable: true, enum: ['SIGN_ON', 'SIGN_OFF'] },
+            question_count: { type: 'integer' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateRegisterRequest: {
+          type: 'object',
+          required: ['name'],
+          properties: {
+            name: { type: 'string', example: 'Detonator Register' },
+            description: { type: 'string', nullable: true },
+            is_active: { type: 'boolean', example: true },
+            staff_type: { type: 'string', nullable: true, enum: ['ALP', 'LP', 'TM'] },
+            duty_type: { type: 'string', nullable: true, enum: ['SIGN_ON', 'SIGN_OFF'] },
+          },
+        },
+        ReplaceRegisterQuestionsRequest: {
+          type: 'object',
+          required: ['questions'],
+          properties: {
+            questions: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['question_id'],
+                properties: {
+                  question_id: { type: 'string', format: 'uuid' },
+                  sort_order: { type: 'integer', minimum: 0 },
+                  column_label: { type: 'string', nullable: true },
+                  is_key_field: { type: 'boolean', example: true },
+                },
+              },
+            },
           },
         },
         FormTemplate: {
@@ -1977,6 +2048,172 @@ spec.paths['/health'] = {
                 service: { type: 'string' },
               },
             },
+          },
+        },
+      },
+    },
+  },
+};
+
+spec.paths['/api/registers'] = {
+  get: {
+    tags: ['Registers'],
+    summary: 'List registers (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'isActive', in: 'query', schema: { type: 'boolean' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+      { name: 'staffType', in: 'query', schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] } },
+      { name: 'dutyType', in: 'query', schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] } },
+    ],
+    responses: {
+      200: { description: 'Register list' },
+      401: { description: 'Unauthorized' },
+      403: { description: 'Division admin required' },
+    },
+  },
+  post: {
+    tags: ['Registers'],
+    summary: 'Create register (Admin only)',
+    security: [{ bearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/CreateRegisterRequest' } },
+      },
+    },
+    responses: {
+      201: { description: 'Register created' },
+      400: { description: 'Validation error' },
+    },
+  },
+};
+
+spec.paths['/api/registers/{id}'] = {
+  get: {
+    tags: ['Registers'],
+    summary: 'Get register with mapped questions (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Register detail' },
+      404: { description: 'Not found' },
+    },
+  },
+  patch: {
+    tags: ['Registers'],
+    summary: 'Update register (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/CreateRegisterRequest' } },
+      },
+    },
+    responses: {
+      200: { description: 'Register updated' },
+      404: { description: 'Not found' },
+    },
+  },
+  delete: {
+    tags: ['Registers'],
+    summary: 'Deactivate register (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: {
+      200: { description: 'Register deactivated' },
+      404: { description: 'Not found' },
+    },
+  },
+};
+
+spec.paths['/api/registers/{id}/questions'] = {
+  get: {
+    tags: ['Registers'],
+    summary: 'List mapped questions for a register (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    responses: { 200: { description: 'Mapped questions' }, 404: { description: 'Not found' } },
+  },
+  put: {
+    tags: ['Registers'],
+    summary: 'Replace register question mapping (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': { schema: { $ref: '#/components/schemas/ReplaceRegisterQuestionsRequest' } },
+      },
+    },
+    responses: { 200: { description: 'Mapping updated' }, 400: { description: 'Validation error' } },
+  },
+};
+
+spec.paths['/api/registers/{id}/entries'] = {
+  get: {
+    tags: ['Registers'],
+    summary: 'List register entries (paper-book view, Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1 } },
+      { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+    ],
+    responses: { 200: { description: 'Paginated register entries' }, 404: { description: 'Not found' } },
+  },
+};
+
+spec.paths['/api/registers/{id}/analytics/summary'] = {
+  get: {
+    tags: ['Registers'],
+    summary: 'Register analytics summary (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+    ],
+    responses: { 200: { description: 'Summary totals and by-date counts' } },
+  },
+};
+
+spec.paths['/api/registers/{id}/export/preview'] = {
+  get: {
+    tags: ['Registers'],
+    summary: 'JSON preview of register Excel export (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+    ],
+    responses: { 200: { description: 'Workbook-like JSON for Flutter table rendering' } },
+  },
+};
+
+spec.paths['/api/registers/{id}/export'] = {
+  get: {
+    tags: ['Registers'],
+    summary: 'Download register Excel export (Admin only)',
+    security: [{ bearerAuth: [] }],
+    parameters: [
+      { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      { name: 'from_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'to_date', in: 'query', schema: { type: 'string', format: 'date' } },
+      { name: 'search', in: 'query', schema: { type: 'string' } },
+    ],
+    responses: {
+      200: {
+        description: 'XLSX file',
+        content: {
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+            schema: { type: 'string', format: 'binary' },
           },
         },
       },

@@ -16,6 +16,7 @@ import StreamSession from '../modules/streams/streamSession.model.js';
 import DeviceHeartbeat from '../modules/monitoring/deviceHeartbeat.model.js';
 import DeviceScreenshot from '../modules/monitoring/deviceScreenshot.model.js';
 import { initFormModels } from '../modules/forms/index.js';
+import { initRegisterModels } from '../modules/registers/index.js';
 
 let initialized = false;
 
@@ -25,6 +26,7 @@ export function initModels() {
   }
 
   initFormModels();
+  initRegisterModels();
 
   Division.hasMany(Lobby, {
     foreignKey: 'division_id',

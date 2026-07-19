@@ -287,6 +287,26 @@ Base URL is server root (e.g. `http://localhost:3000`). All `/api/*` routes belo
 | GET | `/api/forms/submissions/me/latest` | requireAuth, requireUser |
 | GET | `/api/forms/submissions/me` | requireAuth, requireUser |
 
+### `/api/registers` (`src/modules/registers/register.routes.js`)
+
+Dynamic admin registers mapped onto form questions. Crew still submits via `/api/forms`; admin reviews paper-book style views and exports here.
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/registers` | requireAuth, requireDivisionAdmin |
+| GET | `/api/registers` | requireAuth, requireDivisionAdmin |
+| GET | `/api/registers/:id` | requireAuth, requireDivisionAdmin |
+| PATCH | `/api/registers/:id` | requireAuth, requireDivisionAdmin |
+| DELETE | `/api/registers/:id` | requireAuth, requireDivisionAdmin (deactivates) |
+| GET | `/api/registers/:id/questions` | requireAuth, requireDivisionAdmin |
+| PUT | `/api/registers/:id/questions` | requireAuth, requireDivisionAdmin |
+| GET | `/api/registers/:id/entries` | requireAuth, requireDivisionAdmin |
+| GET | `/api/registers/:id/analytics/summary` | requireAuth, requireDivisionAdmin |
+| GET | `/api/registers/:id/export/preview` | requireAuth, requireDivisionAdmin |
+| GET | `/api/registers/:id/export` | requireAuth, requireDivisionAdmin |
+
+Questions now support `field_type`, `options`, and stable `key` for cross-form register columns.
+
 ### `/api/health` (`src/modules/health/health.routes.js`)
 
 | Method | Path | Middleware |
