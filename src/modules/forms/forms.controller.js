@@ -5,46 +5,21 @@ import User from '../users/user.model.js';
 import { toUserResponse } from '../users/userResponse.js';
 import { Form, Question, Submission, Answer } from './index.js';
 import { logInfo, logWarn, logError } from '../../utils/logger.js';
-import { parseQuestionFieldExtras, validateAnswerForFieldType } from './questionFieldTypes.js';
+import { parseQuestionFieldExtras } from './questionFieldTypes.js';
+import {
+  STAFF_TYPES,
+  DUTY_TYPES,
+  isValidUuid,
+  parseFormContext,
+  getActiveFormByContext,
+  getTodayDateOnly,
+  loadOrderedFormQuestions,
+  validateAndNormalizeAnswers,
+  createSubmissionWithAnswers,
+} from './formSubmission.service.js';
 
-function isValidUuid(value) {
-  if (typeof value !== 'string') return false;
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-const STAFF_TYPES = ['ALP', 'LP', 'TM'];
-const DUTY_TYPES = ['SIGN_ON', 'SIGN_OFF'];
-
-function normalizeEnumValue(value) {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.toUpperCase();
-}
-
-function parseFormContext({ staffType, dutyType }, { source = 'query' } = {}) {
-  const normalizedStaffType = normalizeEnumValue(staffType);
-  const normalizedDutyType = normalizeEnumValue(dutyType);
-
-  if (!normalizedStaffType) {
-    return { error: `${source}.staffType is required` };
-  }
-  if (!STAFF_TYPES.includes(normalizedStaffType)) {
-    return { error: `${source}.staffType must be one of ${STAFF_TYPES.join(', ')}` };
-  }
-  if (!normalizedDutyType) {
-    return { error: `${source}.dutyType is required` };
-  }
-  if (!DUTY_TYPES.includes(normalizedDutyType)) {
-    return { error: `${source}.dutyType must be one of ${DUTY_TYPES.join(', ')}` };
-  }
-
-  return {
-    context: {
-      staffType: normalizedStaffType,
-      dutyType: normalizedDutyType,
-    },
-  };
+async function getActiveForm() {
+  return Form.findOne({ where: { is_active: true } });
 }
 
 function parseQuestionPayload(body, { partial = false } = {}) {
@@ -120,20 +95,6 @@ function parseTemplatePayload(body) {
   };
 }
 
-async function getActiveForm() {
-  return Form.findOne({ where: { is_active: true } });
-}
-
-async function getActiveFormByContext({ staffType, dutyType }) {
-  return Form.findOne({
-    where: {
-      is_active: true,
-      staff_type: staffType,
-      duty_type: dutyType,
-    },
-  });
-}
-
 async function getOrCreateActiveForm() {
   const existing = await getActiveForm();
   if (existing) return existing;
@@ -152,14 +113,6 @@ async function getOrCreateActiveForm() {
     }
     throw err;
   }
-}
-
-function getTodayDateOnly() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
 }
 
 function parsePositiveInt(value, fallback) {
@@ -811,11 +764,7 @@ export async function getTodayQuestions(req, res) {
       });
     }
 
-    const questions = await Question.findAll({
-      where: { form_id: activeForm.id },
-      order: [['sort_order', 'ASC'], ['created_at', 'ASC']],
-      attributes: ['id', 'prompt', 'field_type', 'options', 'key', 'is_required', 'sort_order'],
-    });
+    const questions = await loadOrderedFormQuestions(activeForm.id);
 
     return res.json({
       success: true,
@@ -851,13 +800,6 @@ export async function submitTodayAnswers(req, res) {
       return res.status(400).json({ success: false, message: error });
     }
 
-    const payloadAnswers = req.body?.answers;
-
-    if (!Array.isArray(payloadAnswers) || payloadAnswers.length === 0) {
-      await tx.rollback();
-      return res.status(400).json({ success: false, message: 'answers must be a non-empty array' });
-    }
-
     const activeForm = await getActiveFormByContext(context);
     if (!activeForm) {
       await tx.rollback();
@@ -867,93 +809,35 @@ export async function submitTodayAnswers(req, res) {
       });
     }
 
-    const questions = await Question.findAll({
-      where: { form_id: activeForm.id },
-      order: [['sort_order', 'ASC'], ['created_at', 'ASC']],
+    const questions = await loadOrderedFormQuestions(activeForm.id, {
       transaction: tx,
       lock: tx.LOCK.UPDATE,
     });
 
-    if (questions.length === 0) {
+    const validated = validateAndNormalizeAnswers(req.body?.answers, questions);
+    if (validated.error) {
       await tx.rollback();
-      return res.status(400).json({ success: false, message: 'No active questions available for submission' });
-    }
-
-    const questionMap = new Map(questions.map((q) => [q.id, q]));
-    const seenQuestionIds = new Set();
-    const normalizedAnswers = [];
-
-    for (const [index, answer] of payloadAnswers.entries()) {
-      if (!answer || typeof answer !== 'object') {
-        await tx.rollback();
-        return res.status(400).json({ success: false, message: `answers[${index}] must be an object` });
-      }
-
-      const questionId = answer.question_id;
-      const answerText = typeof answer.answer_text === 'string' ? answer.answer_text.trim() : '';
-      if (!isValidUuid(questionId)) {
-        await tx.rollback();
-        return res.status(400).json({ success: false, message: `answers[${index}].question_id must be a valid UUID` });
-      }
-      if (!answerText) {
-        await tx.rollback();
-        return res.status(400).json({ success: false, message: `answers[${index}].answer_text is required` });
-      }
-      if (!questionMap.has(questionId)) {
-        await tx.rollback();
-        return res.status(400).json({ success: false, message: `answers[${index}].question_id is not an active question` });
-      }
-      if (seenQuestionIds.has(questionId)) {
-        await tx.rollback();
-        return res.status(400).json({ success: false, message: `Duplicate answer for question ${questionId}` });
-      }
-
-      const question = questionMap.get(questionId);
-      const typeError = validateAnswerForFieldType(
-        question.field_type || 'TEXT',
-        answerText,
-        question.options
-      );
-      if (typeError) {
-        await tx.rollback();
-        return res.status(400).json({
-          success: false,
-          message: `answers[${index}]: ${typeError}`,
-        });
-      }
-
-      seenQuestionIds.add(questionId);
-      normalizedAnswers.push({ question_id: questionId, answer_text: answerText });
-    }
-
-    const missingRequired = questions
-      .filter((q) => q.is_required && !seenQuestionIds.has(q.id))
-      .map((q) => q.id);
-    if (missingRequired.length > 0) {
-      await tx.rollback();
-      return res.status(400).json({
+      const payload = {
         success: false,
-        message: 'All required questions must be answered',
-        missing_required_question_ids: missingRequired,
-      });
+        message: validated.error.message,
+      };
+      if (validated.error.missing_required_question_ids) {
+        payload.missing_required_question_ids = validated.error.missing_required_question_ids;
+      }
+      return res.status(validated.error.status).json(payload);
     }
 
-    const submission = await Submission.create(
+    const { submission, answers } = await createSubmissionWithAnswers(
       {
-        user_id: userId,
-        form_id: activeForm.id,
-        submission_date: submissionDate,
+        userId,
+        formId: activeForm.id,
+        submissionDate,
+        staffType: context.staffType,
+        dutyType: context.dutyType,
+        submissionSource: 'AUTHENTICATED',
+        normalizedAnswers: validated.normalizedAnswers,
       },
-      { transaction: tx }
-    );
-
-    const answers = await Answer.bulkCreate(
-      normalizedAnswers.map((answer) => ({
-        submission_id: submission.id,
-        question_id: answer.question_id,
-        answer_text: answer.answer_text,
-      })),
-      { transaction: tx }
+      tx
     );
 
     await tx.commit();

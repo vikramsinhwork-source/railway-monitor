@@ -2221,6 +2221,109 @@ spec.paths['/api/registers/{id}/export'] = {
   },
 };
 
+spec.components.schemas.PublicRespondent = {
+  type: 'object',
+  required: ['user_id', 'name', 'mobile'],
+  properties: {
+    user_id: {
+      type: 'string',
+      description: 'Business User ID. Backend trims and uppercases before lookup/create.',
+      example: 'emp-1042',
+    },
+    name: { type: 'string', example: 'Mayursinh B' },
+    mobile: { type: 'string', example: '+91 98765 43210' },
+  },
+};
+
+spec.components.schemas.PublicSubmitRequest = {
+  type: 'object',
+  required: ['staffType', 'dutyType', 'respondent', 'idempotency_key', 'answers'],
+  properties: {
+    staffType: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+    dutyType: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
+    respondent: { $ref: '#/components/schemas/PublicRespondent' },
+    idempotency_key: { type: 'string', format: 'uuid' },
+    answers: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['question_id', 'answer_text'],
+        properties: {
+          question_id: { type: 'string', format: 'uuid' },
+          answer_text: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+spec.paths['/api/public/forms/contexts'] = {
+  get: {
+    tags: ['Public Forms'],
+    summary: 'List active staff/duty form contexts (no auth)',
+    security: [],
+    responses: {
+      200: { description: 'Active contexts with form ids' },
+      429: { description: 'Rate limited' },
+    },
+  },
+};
+
+spec.paths['/api/public/forms/current'] = {
+  get: {
+    tags: ['Public Forms'],
+    summary: 'Fetch active public form and typed questions (no auth)',
+    security: [],
+    parameters: [
+      {
+        name: 'staffType',
+        in: 'query',
+        required: true,
+        schema: { type: 'string', enum: ['ALP', 'LP', 'TM'] },
+      },
+      {
+        name: 'dutyType',
+        in: 'query',
+        required: true,
+        schema: { type: 'string', enum: ['SIGN_ON', 'SIGN_OFF'] },
+      },
+    ],
+    responses: {
+      200: { description: 'Public-safe form metadata and questions' },
+      400: { description: 'Invalid staff/duty' },
+      404: { description: 'No active form for context' },
+      429: { description: 'Rate limited' },
+    },
+  },
+};
+
+spec.paths['/api/public/forms/submissions'] = {
+  post: {
+    tags: ['Public Forms'],
+    summary: 'Submit public form; find or create USER with password 12345678 (no auth)',
+    description:
+      'Uppercases respondent.user_id, finds or creates an active USER (account_origin=PUBLIC_FORM, common password 12345678), and creates a PUBLIC submission. One public submission per user/staff/duty/day. Idempotent retries reuse idempotency_key.',
+    security: [],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: { $ref: '#/components/schemas/PublicSubmitRequest' },
+        },
+      },
+    },
+    responses: {
+      201: { description: 'Submission created' },
+      200: { description: 'Idempotent replay of an existing submission' },
+      400: { description: 'Validation error' },
+      404: { description: 'No active form' },
+      409: { description: 'Already submitted today for this staff/duty' },
+      413: { description: 'Payload too large' },
+      429: { description: 'Rate limited' },
+    },
+  },
+};
+
 export const swaggerSpec = spec;
 export const swaggerUiHandler = swaggerUi.serve;
 export const swaggerUiSetup = swaggerUi.setup(spec);

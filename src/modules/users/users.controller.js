@@ -34,6 +34,7 @@ const USER_RESPONSE_ATTRIBUTES = [
   'crew_type',
   'head_quarter',
   'mobile',
+  'account_origin',
 ];
 
 const USER_ROLES = ['SUPER_ADMIN', 'DIVISION_ADMIN', 'MONITOR', 'USER'];
@@ -121,6 +122,7 @@ export async function createUser(req, res) {
       password_hash,
       role: 'USER',
       status: 'ACTIVE',
+      account_origin: 'REGISTERED',
       created_by: req.auth.userId,
       crew_type: crew_type !== undefined ? crew_type || null : null,
       head_quarter: head_quarter !== undefined ? head_quarter || null : null,
@@ -148,7 +150,7 @@ export async function createUser(req, res) {
 
 export async function listUsers(req, res) {
   try {
-    const { search, q, role, status } = req.query;
+    const { search, q, role, status, account_origin } = req.query;
 
     const where = {};
 
@@ -159,6 +161,7 @@ export async function listUsers(req, res) {
         { user_id: { [Op.iLike]: likeTerm } },
         { name: { [Op.iLike]: likeTerm } },
         { email: { [Op.iLike]: likeTerm } },
+        { mobile: { [Op.iLike]: likeTerm } },
       ];
     }
 
@@ -172,6 +175,13 @@ export async function listUsers(req, res) {
         ? status.toUpperCase()
         : null;
       if (validStatus) where.status = validStatus;
+    }
+
+    if (account_origin) {
+      const origin = String(account_origin).trim().toUpperCase();
+      if (['REGISTERED', 'PUBLIC_FORM'].includes(origin)) {
+        where.account_origin = origin;
+      }
     }
 
     if (isDivisionAdmin(req)) {

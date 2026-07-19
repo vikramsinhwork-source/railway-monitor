@@ -33,6 +33,26 @@ const Submission = sequelize.define(
       type: DataTypes.DATEONLY,
       allowNull: false,
     },
+    submission_source: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'AUTHENTICATED',
+      validate: {
+        isIn: [['AUTHENTICATED', 'PUBLIC']],
+      },
+    },
+    staff_type: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+    },
+    duty_type: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+    },
+    idempotency_key: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
   },
   {
     tableName: 'submissions',
@@ -51,6 +71,14 @@ const Submission = sequelize.define(
       {
         fields: ['created_at'],
         name: 'submissions_created_at_idx',
+      },
+      {
+        fields: ['submission_source'],
+        name: 'submissions_submission_source_idx',
+      },
+      {
+        fields: ['staff_type', 'duty_type', 'submission_date'],
+        name: 'submissions_context_date_idx',
       },
     ],
   }

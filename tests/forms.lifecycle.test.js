@@ -46,7 +46,12 @@ async function createUser(adminToken, user_id, name, password) {
   const { status, data } = await rest('/api/users', {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}` },
-    body: JSON.stringify({ user_id, name, password }),
+    body: JSON.stringify({
+      user_id,
+      name,
+      password,
+      email: `${user_id}@example.com`,
+    }),
   });
   assert.strictEqual(status, 201, `Create user failed: ${JSON.stringify(data)}`);
   return data.user;

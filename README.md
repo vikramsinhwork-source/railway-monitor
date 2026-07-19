@@ -307,6 +307,30 @@ Dynamic admin registers mapped onto form questions. Crew still submits via `/api
 
 Questions now support `field_type`, `options`, and stable `key` for cross-form register columns.
 
+### `/api/public/forms` (`src/modules/publicForms/publicForm.routes.js`)
+
+Unauthenticated public form API used by the separate `r-m-public-form` static site. No JWT required. Rate-limited.
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/api/public/forms/contexts` | none |
+| GET | `/api/public/forms/current?staffType=&dutyType=` | none |
+| POST | `/api/public/forms/submissions` | none |
+
+Behavior highlights:
+
+- Respondent provides `user_id`, `name`, and `mobile` on submit.
+- Backend trims and **uppercases** `user_id` before lookup/create (`emp-1042` → `EMP-1042`).
+- Missing users are created as active `USER` with password `12345678`, generated internal email, and `account_origin=PUBLIC_FORM`.
+- Existing `REGISTERED` accounts are reused without overwriting password/email.
+- Existing `PUBLIC_FORM` accounts refresh name/mobile from the latest submission.
+- `submissions.user_id` remains a required FK to `users.id`.
+- One `PUBLIC` submission per user + staff + duty + server date (`409` on conflict).
+- `idempotency_key` enables safe retries.
+- Public submissions appear in register entries/analytics/exports with `submission_source` and `account_origin`.
+
+See also: [`docs/public-form-integration.md`](docs/public-form-integration.md) and the sibling repo `../r-m-public-form`.
+
 ### `/api/health` (`src/modules/health/health.routes.js`)
 
 | Method | Path | Middleware |

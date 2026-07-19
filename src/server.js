@@ -17,6 +17,7 @@ import usersRoutes from './modules/users/users.routes.js';
 import { initModels } from './models/index.js';
 import formsRoutes from './modules/forms/forms.routes.js';
 import registerRoutes from './modules/registers/register.routes.js';
+import publicFormRoutes from './modules/publicForms/publicForm.routes.js';
 import divisionRoutes from './modules/divisions/division.route.js';
 import lobbyRoutes from './modules/lobbies/lobby.route.js';
 import deviceRoutes from './modules/devices/device.route.js';
@@ -96,7 +97,19 @@ async function initDB() {
 app.use(cors(corsOptions));
 app.options('*', cors());
 
-app.use(express.json());
+// Cap JSON body size; public signature payloads can be large but still bounded.
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }));
+
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({
+      success: false,
+      message: 'Request body too large',
+      code: 'PAYLOAD_TOO_LARGE',
+    });
+  }
+  return next(err);
+});
 
 app.get('/webrtc-test', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -244,6 +257,7 @@ app.use('/api/users', usersRoutes);
 app.use('/api/face', faceRoutes);
 app.use('/api/forms', formsRoutes);
 app.use('/api/registers', registerRoutes);
+app.use('/api/public/forms', publicFormRoutes);
 app.use('/api/divisions', divisionRoutes);
 app.use('/api/lobbies', lobbyRoutes);
 app.use('/api/devices', deviceRoutes);
@@ -295,6 +309,11 @@ logInfo('Server', 'Auth and user routes registered', {
     '/api/registers/:id/analytics/summary',
     '/api/registers/:id/export/preview',
     '/api/registers/:id/export',
+  ],
+  publicForms: [
+    '/api/public/forms/contexts',
+    '/api/public/forms/current',
+    '/api/public/forms/submissions',
   ],
   divisions: [
     '/api/divisions',

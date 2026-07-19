@@ -299,7 +299,12 @@ function buildEntriesSql({ register, mappings, fromDate, toDate, search, limit, 
   }
 
   const searchFilter = search
-    ? `AND (u.user_id ILIKE :searchLike OR u.name ILIKE :searchLike OR u.email ILIKE :searchLike)`
+    ? `AND (
+      u.user_id ILIKE :searchLike
+      OR u.name ILIKE :searchLike
+      OR u.email ILIKE :searchLike
+      OR COALESCE(u.mobile, '') ILIKE :searchLike
+    )`
     : '';
   if (search) replacements.searchLike = `%${search}%`;
 
@@ -369,14 +374,19 @@ function buildEntriesSql({ register, mappings, fromDate, toDate, search, limit, 
       s.id::text AS submission_id,
       s.submission_date::text AS submission_date,
       s.created_at AS submission_created_at,
+      s.submission_source,
+      COALESCE(s.staff_type, f.staff_type::text) AS staff_type,
+      COALESCE(s.duty_type, f.duty_type::text) AS duty_type,
       u.id::text AS user_pk,
       u.user_id,
       u.name,
       u.email,
+      u.mobile,
       u.crew_type,
+      u.account_origin,
       f.id::text AS form_id,
-      f.staff_type,
-      f.duty_type
+      f.staff_type AS form_staff_type,
+      f.duty_type AS form_duty_type
     FROM submissions s
     INNER JOIN forms f ON f.id = s.form_id
     INNER JOIN users u ON u.id = s.user_id AND u.role = 'USER'
@@ -472,17 +482,20 @@ export async function listRegisterEntries(registerId, query) {
       submission_id: row.submission_id,
       submission_date: row.submission_date,
       submission_created_at: row.submission_created_at,
+      submission_source: row.submission_source || 'AUTHENTICATED',
       user: {
         id: row.user_pk,
         user_id: row.user_id,
         name: row.name,
         email: row.email,
+        mobile: row.mobile || null,
         crew_type: row.crew_type,
+        account_origin: row.account_origin || 'REGISTERED',
       },
       form: {
         id: row.form_id,
-        staff_type: row.staff_type,
-        duty_type: row.duty_type,
+        staff_type: row.staff_type || row.form_staff_type,
+        duty_type: row.duty_type || row.form_duty_type,
       },
       values,
     };
@@ -593,6 +606,9 @@ export async function buildRegisterExportWorkbookData(registerId, { fromDate, to
     { key: 'user_id', header: 'User ID', width: 18 },
     { key: 'name', header: 'Name', width: 24 },
     { key: 'email', header: 'Email', width: 28 },
+    { key: 'mobile', header: 'Mobile', width: 16 },
+    { key: 'account_origin', header: 'Account Origin', width: 16 },
+    { key: 'submission_source', header: 'Submission Source', width: 16 },
     { key: 'submission_date', header: 'Submission Date', width: 16 },
     { key: 'submission_created_at', header: 'Submitted At', width: 20 },
     { key: 'staff_type', header: 'Staff Type', width: 12 },
@@ -613,6 +629,9 @@ export async function buildRegisterExportWorkbookData(registerId, { fromDate, to
       user_id: entry.user.user_id || '',
       name: entry.user.name || '',
       email: entry.user.email || '',
+      mobile: entry.user.mobile || '',
+      account_origin: entry.user.account_origin || 'REGISTERED',
+      submission_source: entry.submission_source || 'AUTHENTICATED',
       submission_date: entry.submission_date || '',
       submission_created_at: formatCellDate(entry.submission_created_at),
       staff_type: entry.form.staff_type || '',

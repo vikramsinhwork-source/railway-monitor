@@ -96,6 +96,14 @@ const User = sequelize.define(
       type: DataTypes.STRING(500),
       allowNull: true,
     },
+    account_origin: {
+      type: DataTypes.STRING(20),
+      allowNull: false,
+      defaultValue: 'REGISTERED',
+      validate: {
+        isIn: [['REGISTERED', 'PUBLIC_FORM']],
+      },
+    },
   },
   {
     tableName: 'users',
@@ -106,6 +114,10 @@ const User = sequelize.define(
       {
         fields: ['division_id'],
         name: 'users_division_id_idx',
+      },
+      {
+        fields: ['account_origin'],
+        name: 'users_account_origin_idx',
       },
     ],
     defaultScope: {

@@ -73,6 +73,7 @@ export async function signup(req, res) {
       password_hash,
       role: 'USER',
       status,
+      account_origin: 'REGISTERED',
       approved_at: status === 'ACTIVE' ? new Date() : null,
       created_by: null,
       crew_type: crew_type !== undefined ? crew_type || null : null,
@@ -121,9 +122,14 @@ export async function login(req, res) {
       });
     }
 
-    const user = await User.scope(null).findOne({ where: { user_id } });
+    const trimmedUserId = String(user_id).trim();
+    const upperUserId = trimmedUserId.toUpperCase();
+    let user = await User.scope(null).findOne({ where: { user_id: trimmedUserId } });
+    if (!user && upperUserId !== trimmedUserId) {
+      user = await User.scope(null).findOne({ where: { user_id: upperUserId } });
+    }
     if (!user) {
-      logWarn('Auth', 'Login failed: user not found', { user_id });
+      logWarn('Auth', 'Login failed: user not found', { user_id: trimmedUserId });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -132,7 +138,7 @@ export async function login(req, res) {
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
-      logWarn('Auth', 'Login failed: invalid password', { user_id });
+      logWarn('Auth', 'Login failed: invalid password', { user_id: user.user_id });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials',
@@ -140,7 +146,7 @@ export async function login(req, res) {
     }
 
     if (user.status === 'PENDING_APPROVAL') {
-      logWarn('Auth', 'Login failed: pending approval', { user_id });
+      logWarn('Auth', 'Login failed: pending approval', { user_id: user.user_id });
       return res.status(403).json({
         success: false,
         error: 'ACCOUNT_PENDING_APPROVAL',
@@ -149,7 +155,7 @@ export async function login(req, res) {
     }
 
     if (user.status !== 'ACTIVE') {
-      logWarn('Auth', 'Login failed: user inactive', { user_id });
+      logWarn('Auth', 'Login failed: user inactive', { user_id: user.user_id });
       return res.status(403).json({
         success: false,
         message: 'Account is inactive',
