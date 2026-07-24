@@ -620,29 +620,44 @@ export const initializeSocket = (io) => {
         const existingSession = sessionsState.getSession(kioskId);
         // Only allow if this monitor already owns the session
         if (existingSession.monitorSocketId !== socket.id) {
-          logWarn('Session', 'Start monitoring failed: Session already exists', {
-            clientId,
-            kioskId,
-            existingMonitorId: existingSession.monitorId
-          });
-          emitError(socket, ERROR_CODES.SESSION_ALREADY_EXISTS,
-            `Kiosk ${kioskId} is already being monitored by another monitor`, {
+          const ownerSocket = io.sockets.sockets.get(existingSession.monitorSocketId);
+          const ownerAlive = !!(ownerSocket && ownerSocket.connected);
+          if (!ownerAlive) {
+            logWarn('Session', 'Reclaiming stale session from dead monitor socket', {
+              clientId,
+              kioskId,
+              staleMonitorId: existingSession.monitorId,
+              staleSocketId: existingSession.monitorSocketId,
+            });
+            sessionsState.endSession(kioskId);
+            // Fall through to create a new session below.
+          } else {
+            logWarn('Session', 'Start monitoring failed: Session already exists', {
+              clientId,
+              kioskId,
               existingMonitorId: existingSession.monitorId
             });
+            emitError(socket, ERROR_CODES.SESSION_ALREADY_EXISTS,
+              `Kiosk ${kioskId} is already being monitored by another monitor`, {
+                existingMonitorId: existingSession.monitorId,
+                kioskId,
+              });
+            return;
+          }
+        } else {
+          // If monitor already owns session, just update activity
+          sessionsState.updateSessionActivity(kioskId);
+          socket.emit('monitoring-started', {
+            kioskId,
+            sessionId: kioskId, // Using kioskId as session identifier
+            timestamp: new Date().toISOString()
+          });
+          logInfo('Session', 'Monitoring session activity updated', {
+            monitorId: clientId,
+            kioskId
+          });
           return;
         }
-        // If monitor already owns session, just update activity
-        sessionsState.updateSessionActivity(kioskId);
-        socket.emit('monitoring-started', {
-          kioskId,
-          sessionId: kioskId, // Using kioskId as session identifier
-          timestamp: new Date().toISOString()
-        });
-        logInfo('Session', 'Monitoring session activity updated', {
-          monitorId: clientId,
-          kioskId
-        });
-        return;
       }
 
       (async () => {
@@ -2574,27 +2589,32 @@ export const initializeSocket = (io) => {
           const appRole = appUser?.role ? normalizeRole(appUser.role) : null;
           const isFieldMonitor = !appUser || appRole === APP_ROLES.MONITOR;
 
-          if (!isFieldMonitor) {
-            logInfo('Socket', 'Admin socket disconnect — monitoring sessions preserved', {
-              clientId,
-              appRole,
-            });
-          } else {
-          // End all active sessions owned by this monitor (one monitor can have multiple kiosk sessions)
+          // Always end in-memory sessions owned by this socket.
+          // Preserving admin sessions left zombie monitorSocketIds that blocked remonitoring.
           const endedSessions = sessionsState.endSessionByMonitorSocket(socket.id);
-          await cacheDisconnectForReconnect({
-            userId,
-            sessions: endedSessions.map((s) => ({
-              division_id: null,
-              lobby_id: null,
-              device_id: s.kioskId,
-            })),
+          logInfo('Socket', 'Monitor/admin disconnect — ending owned sessions', {
+            clientId,
+            appRole,
+            isFieldMonitor,
+            endedCount: endedSessions.length,
           });
-          await endSessionsByMonitorUser({
-            monitorUserId: userId,
-            status: 'TIMEOUT',
-            disconnectReason: 'monitor-disconnect',
-          });
+
+          if (isFieldMonitor) {
+            await cacheDisconnectForReconnect({
+              userId,
+              sessions: endedSessions.map((s) => ({
+                division_id: null,
+                lobby_id: null,
+                device_id: s.kioskId,
+              })),
+            });
+            await endSessionsByMonitorUser({
+              monitorUserId: userId,
+              status: 'TIMEOUT',
+              disconnectReason: 'monitor-disconnect',
+            });
+          }
+
           for (const endedSession of endedSessions) {
             await handleMonitoringEndedRegistry({
               kioskId: endedSession.kioskId,
@@ -2628,7 +2648,6 @@ export const initializeSocket = (io) => {
               monitorId: monitor.monitorId,
               socketId: socket.id
             });
-          }
           }
         }
 

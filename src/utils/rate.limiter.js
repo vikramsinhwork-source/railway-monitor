@@ -21,7 +21,7 @@ const DEFAULT_LIMITS = {
   'crew-sign-off': 10,     // 10 sign-offs per minute per kiosk
   'offer': 30,             // 30 offers per minute per client
   'answer': 30,            // 30 answers per minute per client
-  'ice-candidate': 60,     // 60 ICE candidates per minute per client
+  'ice-candidate': 300,    // WebRTC can emit many candidates per connect (was 60)
   'monitor-message': 60,   // 60 messages per minute per monitor
   'join-as-observer': 20,  // 20 observer joins per minute per client
   'device:online': 30,
