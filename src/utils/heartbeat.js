@@ -14,6 +14,7 @@ import { logInfo, logWarn, logDebug } from './logger.js';
 
 import { getKiosk, markOffline as markKioskOffline, isKioskOnline } from '../state/kiosks.state.js';
 import { endSessionByKiosk } from '../state/sessions.state.js';
+import { emitToEligibleMonitors } from '../socket/kiosk-visibility.js';
 
 // Heartbeat configuration (in milliseconds)
 const HEARTBEAT_INTERVAL_MS = 15000;  // Client should ping every 15 seconds
@@ -66,12 +67,12 @@ export const checkHeartbeatTimeouts = (io) => {
         const endedSession = endSessionByKiosk(kioskId);
         
         // Notify monitors (include name for admin UI)
-        io.to('monitors').emit('kiosk-offline', {
+        emitToEligibleMonitors(io, 'kiosk-offline', {
           kioskId,
           name: kioskName,
           timestamp: new Date().toISOString(),
           reason: 'heartbeat-timeout'
-        });
+        }, kioskInfo?.divisionId || null);
 
         // Notify monitors of session end if session existed
         if (endedSession) {

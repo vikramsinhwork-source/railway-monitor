@@ -10,6 +10,7 @@ export const USERS = {
   ahmedabadMonitor: { user_id: 'ahmedabad_monitor', password: 'ChangeMe@123' },
   bhavnagarMonitor: { user_id: 'bhavnagar_monitor', password: 'ChangeMe@123' },
   kioskUser: { user_id: 'LOBBY', password: '12345678' },
+  vatvaKiosk: { user_id: 'VATVA', password: '12345678' },
 };
 
 export const DIVISION_NAMES = {

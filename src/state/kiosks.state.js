@@ -22,9 +22,10 @@ const kiosks = new Map();
  * @param {string} socketId - Socket.IO socket ID
  * @param {string|null} [userId] - Optional DB user id for session binding
  * @param {string|null} [name] - Optional display name for admin UI
+ * @param {string|null} [divisionId] - Optional division id for monitor scoping
  * @returns {Object} Registered kiosk data
  */
-export const registerKiosk = (kioskId, socketId, userId = null, name = null) => {
+export const registerKiosk = (kioskId, socketId, userId = null, name = null, divisionId = null) => {
   if (!kioskId || !socketId) {
     throw new Error('kioskId and socketId are required');
   }
@@ -34,6 +35,7 @@ export const registerKiosk = (kioskId, socketId, userId = null, name = null) => 
     socketId,
     userId: userId ?? null,
     name: name ?? null,
+    divisionId: divisionId ?? null,
     registeredAt: new Date(),
     lastSeenAt: new Date(),
     status: 'online'

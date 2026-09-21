@@ -79,6 +79,11 @@ import { registerStreamHandlers } from './stream.handlers.js';
 import { normalizeRole, ROLES as APP_ROLES } from '../middleware/rbac.middleware.js';
 import { canJoinAsObserver } from '../services/observer-permission.service.js';
 import { joinAsObserver } from '../services/session.service.js';
+import User from '../modules/users/user.model.js';
+import {
+  emitToEligibleMonitors,
+  filterKiosksForMonitor,
+} from './kiosk-visibility.js';
 
 /**
  * In-memory session/call state is keyed by device UUID (Phase 4) or legacy kiosk id.
@@ -105,6 +110,36 @@ function resolveWebRtcSessionKioskId(data, senderRole, clientId, targetId, socke
 function isUuid(value) {
   return typeof value === 'string'
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+async function resolveKioskDivisionId(appUser) {
+  const fromToken = appUser?.division_id || null;
+  const userId = appUser?.userId;
+  if (!userId) return fromToken;
+  try {
+    const row = await User.findByPk(userId, { attributes: ['division_id'] });
+    return row?.division_id || fromToken;
+  } catch {
+    return fromToken;
+  }
+}
+
+async function withKioskDivisions(kiosks) {
+  const missingUserIds = [...new Set(
+    kiosks.filter((kiosk) => !kiosk.divisionId && kiosk.userId).map((kiosk) => kiosk.userId)
+  )];
+  if (missingUserIds.length === 0) return kiosks;
+
+  const users = await User.findAll({
+    where: { id: missingUserIds },
+    attributes: ['id', 'division_id'],
+  });
+  const divisionByUserId = Object.fromEntries(users.map((user) => [user.id, user.division_id]));
+
+  return kiosks.map((kiosk) => ({
+    ...kiosk,
+    divisionId: kiosk.divisionId || divisionByUserId[kiosk.userId] || null,
+  }));
 }
 
 /**
@@ -257,7 +292,14 @@ export const initializeSocket = (io) => {
         const kioskId = payload.deviceId || payload.kioskId || clientId;
         const kioskUserId = appUser ? appUser.userId : null;
         const kioskName = appUser?.name ?? null;
-        const kioskData = kiosksState.registerKiosk(kioskId, socket.id, kioskUserId, kioskName);
+        const kioskDivisionId = await resolveKioskDivisionId(appUser);
+        const kioskData = kiosksState.registerKiosk(
+          kioskId,
+          socket.id,
+          kioskUserId,
+          kioskName,
+          kioskDivisionId
+        );
         socket.join(`device:${kioskId}`);
 
         if (appUser?.userId) {
@@ -268,21 +310,21 @@ export const initializeSocket = (io) => {
               socketRole: role,
               appRole: appUser?.role,
             }),
-            divisionId: appUser?.division_id || null,
+            divisionId: kioskDivisionId,
             lobbyId: payload.lobby_id || null,
           });
         }
 
-        // Notify all monitors that this kiosk is online (include name for admin UI)
-        io.to('monitors').emit('kiosk-online', {
+        // Notify monitors in the same division that this kiosk is online
+        emitToEligibleMonitors(io, 'kiosk-online', {
           kioskId,
           name: kioskData.name ?? kioskId,
           timestamp: new Date().toISOString()
-        });
-        io.to('monitors').emit('device-online', {
+        }, kioskDivisionId);
+        emitToEligibleMonitors(io, 'device-online', {
           deviceId: kioskId,
           timestamp: new Date().toISOString(),
-        });
+        }, kioskDivisionId);
 
         socket.emit('kiosk-registered', {
           kioskId,
@@ -367,14 +409,21 @@ export const initializeSocket = (io) => {
           })
           : [];
 
-        // Send list of online kiosks (include name for admin UI; fallback to kioskId for legacy)
-        const onlineKiosks = kiosksState.getAllKiosks()
-          .filter(kiosk => kiosk.status === 'online')
-          .map(kiosk => ({
-            kioskId: kiosk.kioskId,
-            name: kiosk.name ?? kiosk.kioskId,
-            connectedAt: kiosk.registeredAt.toISOString()
-          }));
+        socket.data.selectedDivisionId = payload.division_id || payload.divisionId || null;
+
+        // Send list of online kiosks in this monitor's division (include name for admin UI)
+        const onlineKiosks = filterKiosksForMonitor(
+          await withKioskDivisions(
+            kiosksState.getAllKiosks().filter((kiosk) => kiosk.status === 'online')
+          ),
+          appUser,
+          socket.data.selectedDivisionId
+        ).map((kiosk) => ({
+          kioskId: kiosk.kioskId,
+          name: kiosk.name ?? kiosk.kioskId,
+          division_id: kiosk.divisionId ?? null,
+          connectedAt: kiosk.registeredAt.toISOString()
+        }));
 
         socket.emit('monitor-registered', {
           monitorId: clientId, // Return clientId for compatibility, but store with socket.id
@@ -2544,13 +2593,14 @@ export const initializeSocket = (io) => {
           }
 
           if (thisSocketOwnsKiosk) {
+            const kioskDivisionId = currentKiosk?.divisionId || appUser?.division_id || null;
             // Notify monitors of kiosk going offline (include name for admin UI)
-            io.to('monitors').emit('kiosk-offline', {
+            emitToEligibleMonitors(io, 'kiosk-offline', {
               kioskId: clientId,
               name: kioskName,
               timestamp: new Date().toISOString(),
               reason: 'disconnect'
-            });
+            }, kioskDivisionId);
             logInfo('Socket', 'Kiosk offline notification sent to monitors', {
               clientId
             });

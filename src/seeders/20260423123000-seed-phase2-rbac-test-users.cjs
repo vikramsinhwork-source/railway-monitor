@@ -3,11 +3,13 @@
 const bcrypt = require('bcrypt');
 
 const PASSWORD = 'ChangeMe@123';
+const VATVA_PASSWORD = '12345678';
 
 /** @type {import('sequelize-cli').Seeder} */
 module.exports = {
   async up(queryInterface) {
     const passwordHash = await bcrypt.hash(PASSWORD, 10);
+    const vatvaPasswordHash = await bcrypt.hash(VATVA_PASSWORD, 10);
 
     const [divisions] = await queryInterface.sequelize.query(`
       SELECT id, name
@@ -37,7 +39,8 @@ module.exports = {
         VALUES
           (gen_random_uuid(), 'superadmin_demo', 'Super Admin Demo', 'superadmin.demo@example.com', :password_hash, 'SUPER_ADMIN', NULL, 'ACTIVE', NULL, NOW(), NOW()),
           (gen_random_uuid(), 'bhavnagar_admin', 'Bhavnagar Admin', 'bhavnagar.admin@example.com', :password_hash, 'DIVISION_ADMIN', :bhavnagar_division_id, 'ACTIVE', NULL, NOW(), NOW()),
-          (gen_random_uuid(), 'ahmedabad_monitor', 'Ahmedabad Monitor', 'ahmedabad.monitor@example.com', :password_hash, 'MONITOR', :ahmedabad_division_id, 'ACTIVE', NULL, NOW(), NOW())
+          (gen_random_uuid(), 'ahmedabad_monitor', 'Ahmedabad Monitor', 'ahmedabad.monitor@example.com', :password_hash, 'MONITOR', :ahmedabad_division_id, 'ACTIVE', NULL, NOW(), NOW()),
+          (gen_random_uuid(), 'VATVA', 'VATVA LOBBY', 'vatva@users.local', :vatva_password_hash, 'USER', :ahmedabad_division_id, 'ACTIVE', NULL, NOW(), NOW())
         ON CONFLICT (user_id)
         DO UPDATE SET
           role = EXCLUDED.role,
@@ -48,6 +51,7 @@ module.exports = {
       {
         replacements: {
           password_hash: passwordHash,
+          vatva_password_hash: vatvaPasswordHash,
           bhavnagar_division_id: bhavnagar.id,
           ahmedabad_division_id: ahmedabad.id,
         },
@@ -96,7 +100,7 @@ module.exports = {
 
     await queryInterface.sequelize.query(`
       DELETE FROM users
-      WHERE user_id IN ('superadmin_demo', 'bhavnagar_admin', 'ahmedabad_monitor');
+      WHERE user_id IN ('superadmin_demo', 'bhavnagar_admin', 'ahmedabad_monitor', 'VATVA');
     `);
 
     await queryInterface.sequelize.query(`
