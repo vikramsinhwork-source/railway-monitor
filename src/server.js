@@ -62,6 +62,9 @@ function assertDatabaseEnv() {
 }
 
 const app = express();
+// One nginx hop (see deploy/nginx-upload-limits.conf.example). A number, not `true`,
+// so a client-supplied X-Forwarded-For cannot override the address nginx appended.
+app.set('trust proxy', 1);
 const server = createServer(app);
 
 const corsOptions = {
